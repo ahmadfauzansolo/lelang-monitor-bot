@@ -61,4 +61,37 @@ def monitor_lelang():
                 title = lot.get("namaLotLelang", "(tanpa judul)")
                 start = lot.get("tglMulaiLelang", "")
                 end = lot.get("tglSelesaiLelang", "")
-                link = f"https://lelang.go.id/l
+                link = f"https://lelang.go.id/lot-lelang/{lot_id}"
+                text = f"🔔 <b>{title}</b>\nInstansi: {instansi}\n🗓 {start} → {end}\n🔗 {link}"
+                if send_message(text):
+                    print("✅ Terkirim:", lot_id)
+                else:
+                    print("❌ Gagal kirim:", lot_id)
+                seen.add(lot_id)
+            save_seen(seen)
+        except Exception as e:
+            print("⚠ Error cek API:", e)
+        time.sleep(CHECK_INTERVAL)
+
+# -----------------------------
+# START MONITOR DI THREAD TERPISAH
+# -----------------------------
+def start_monitor():
+    t = threading.Thread(target=monitor_lelang)
+    t.daemon = True
+    t.start()
+
+# -----------------------------
+# FLASK ROUTE
+# -----------------------------
+@app.route("/")
+def index():
+    return "Bot Lelang Monitor aktif 🚀"
+
+# -----------------------------
+# RUN FLASK DI RENDER
+# -----------------------------
+if __name__ == "__main__":
+    start_monitor()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
