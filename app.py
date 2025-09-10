@@ -1,17 +1,18 @@
 from flask import Flask
-import threading, time, os, requests, json
+import threading, time, requests, json
+import os
+from dotenv import load_dotenv
+
+# -----------------------------
+# LOAD ENV
+# -----------------------------
+load_dotenv()  # untuk local .env
 
 app = Flask(__name__)
 
-# -----------------------------
-# CONFIG
-# -----------------------------
-API_URL = os.getenv(
-    "API_URL",
-    "https://api.lelang.go.id/api/v1/landing-page-kpknl/6705ef6e-f64f-11ed-b3e2-5620a0c2ec5a/katalog-lot-lelang?namakategori[]=Mobil&namakategori[]=Motor"
-)
+API_URL = "https://api.lelang.go.id/api/v1/landing-page-kpknl/6705ef6e-f64f-11ed-b3e2-5620a0c2ec5a/katalog-lot-lelang?namakategori[]=Mobil&namakategori[]=Motor"
 KEYWORD_INSTANSI = os.getenv("KEYWORD_INSTANSI", "KPKNL Surakarta").lower()
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL_SECONDS", "1800"))  # 30 menit
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL_SECONDS", "1800"))
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -60,33 +61,4 @@ def monitor_lelang():
                 title = lot.get("namaLotLelang", "(tanpa judul)")
                 start = lot.get("tglMulaiLelang", "")
                 end = lot.get("tglSelesaiLelang", "")
-                link = f"https://lelang.go.id/lot-lelang/{lot_id}"
-                text = f"🔔 <b>{title}</b>\nInstansi: {instansi}\n🗓 {start} → {end}\n🔗 {link}"
-                if send_message(text):
-                    print("✅ Terkirim:", lot_id)
-                else:
-                    print("❌ Gagal kirim:", lot_id)
-                seen.add(lot_id)
-            save_seen(seen)
-        except Exception as e:
-            print("⚠ Error cek API:", e)
-        time.sleep(CHECK_INTERVAL)
-
-# -----------------------------
-# START MONITOR DI THREAD TERPISAH
-# -----------------------------
-def start_monitor():
-    t = threading.Thread(target=monitor_lelang)
-    t.daemon = True
-    t.start()
-
-# -----------------------------
-# FLASK ROUTE
-# -----------------------------
-@app.route("/")
-def index():
-    return "Bot Lelang Monitor aktif 🚀"
-
-if __name__ == "__main__":
-    start_monitor()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+                link = f"https://lelang.go.id/l
