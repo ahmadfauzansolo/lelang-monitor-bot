@@ -15,6 +15,7 @@ KEYWORD_INSTANSI = os.getenv("KEYWORD_INSTANSI", "KPKNL Surakarta").lower()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 SEEN_FILE = "seen_api.json"
+TEST_MODE = os.getenv("TEST_MODE", "true").lower() == "true"  # default true
 
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Set TELEGRAM_TOKEN dan TELEGRAM_CHAT_ID di environment variables!")
@@ -54,7 +55,7 @@ def format_date(d):
 # TELEGRAM
 # =========================================
 def send_message(lot):
-    """Kirim notifikasi lot ke Telegram, termasuk semua foto"""
+    """Kirim notifikasi lot ke Telegram"""
     lot_id = str(lot.get("id"))
     title = lot.get("title", "(tanpa judul)")
     lokasi = lot.get("city", "(tidak diketahui)")
@@ -71,47 +72,23 @@ def send_message(lot):
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
-    photos = lot.get("photos", [])
-
-    if not photos:
-        # fallback teks kalau ga ada foto
-        requests.post(
+    # kirim teks saja dulu
+    try:
+        ru = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"},
+            timeout=15
         )
-        print(f"[INFO] Lot {lot_id} terkirim tanpa foto")
-        return
-
-    # 🔹 Kirim foto satu per satu (foto pertama ada caption)
-    for i, p in enumerate(photos):
-        file_url = p.get("file", {}).get("fileUrl") if isinstance(p, dict) else None
-        if not file_url:
-            continue
-        photo_url = f"https://api.lelang.go.id{file_url}"
-
-        try:
-            img = requests.get(photo_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-            if img.status_code == 200:
-                files = {"photo": ("img.jpg", img.content)}
-                data = {
-                    "chat_id": TELEGRAM_CHAT_ID,
-                    "caption": caption if i == 0 else "",
-                    "parse_mode": "HTML"
-                }
-                ru = requests.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
-                    data=data,
-                    files=files
-                )
-                print(f"[INFO] Lot {lot_id} foto {i+1} status {ru.status_code}")
-        except Exception as e:
-            print(f"[ERROR] Foto {i+1} lot {lot_id} gagal:", e)
+        print(f"[INFO] Lot {lot_id} terkirim status {ru.status_code}")
+    except Exception as e:
+        print(f"[ERROR] Lot {lot_id} gagal dikirim:", e)
 
 # =========================================
 # MAIN
 # =========================================
 def main():
-    print(f"[{datetime.now()}] Bot mulai jalan...")
+    mode = "TEST MODE" if TEST_MODE else "NORMAL MODE"
+    print(f"[{datetime.now()}] Bot mulai jalan... ({mode})")
 
     try:
         r = requests.get(API_URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
@@ -120,14 +97,20 @@ def main():
         print(f"[ERROR] Gagal ambil data dari API: {e}")
         return
 
-    seen = load_seen()
+    if TEST_MODE:
+        print(f"[INFO] Total {len(data)} lot ditemukan, semua akan dikirim (test mode)")
+        for lot in data:
+            send_message(lot)
+        print(f"[{datetime.now()}] Bot TEST selesai cek.")
+        return
 
+    # --- normal mode pakai seen filter
+    seen = load_seen()
     new_count = 0
     for lot in data:
         lot_id = str(lot.get("id"))
         if not lot_id or lot_id in seen:
             continue
-
         send_message(lot)
         seen.add(lot_id)
         new_count += 1
