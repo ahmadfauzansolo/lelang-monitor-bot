@@ -1,2 +1,6 @@
+# Dependencies utama
 requests
-python-telegram-bot
+python-dotenv
+
+# Kalau nanti kamu mau pakai Flask (versi web/server)
+flask
