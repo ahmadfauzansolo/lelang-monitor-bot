@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FINAL TANPA FILTER)
+# APP.PY - BOT MONITOR LELANG (FINAL)
 # =========================================
 import requests, os
 from dotenv import load_dotenv
@@ -10,7 +10,7 @@ from datetime import datetime
 # =========================================
 load_dotenv()
 
-API_URL = "https://api.lelang.go.id/api/v1/landing-page-kpknl/6705ef6e-f64f-11ed-b3e2-5620a0c2ec5a/katalog-lot-lelang?namakategori[]=Mobil&namakategori[]=Motor"
+API_URL = "https://api.lelang.go.id/v1/auctions"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -21,7 +21,7 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
 # HELPERS
 # =========================================
 def format_date(d):
-    """Format ISO date ke format '12 Sep 2025'"""
+    """Ubah ISO date ke format lebih manusiawi"""
     try:
         dt = datetime.fromisoformat(d)
         return dt.strftime("%d %b %Y")
@@ -32,72 +32,72 @@ def format_date(d):
 # TELEGRAM
 # =========================================
 def send_message(lot):
-    """Kirim notifikasi lot ke Telegram, dengan 1 foto utama kalau ada"""
-    lot_id = str(lot.get("lotLelangId") or lot.get("id"))
-    title = lot.get("namaLotLelang") or lot.get("title", "(tanpa judul)")
-    lokasi = lot.get("namaLokasi") or lot.get("city", "(tidak diketahui)")
-    instansi = lot.get("namaUnitKerja", "(tidak diketahui)")
-    start = format_date(lot.get("tglMulaiLelang", ""))
-    end = format_date(lot.get("tglSelesaiLelang", ""))
-    harga = int(lot.get("nilaiLimit", lot.get("price", 0)))
+    """Kirim notifikasi lot ke Telegram, dengan minimal 1 foto"""
+    lot_id = str(lot.get("id"))
+    title = lot.get("title", "(tanpa judul)")
+    lokasi = lot.get("city", "(tidak diketahui)")
+    instansi = lot.get("office", {}).get("name", "(tidak diketahui)")
+    penjual = lot.get("seller", {}).get("name", "(tidak diketahui)")
 
-    penjual = (
-        lot.get("namaPenjual")
-        or (lot.get("penjual", {}) or {}).get("nama")
-        or "(tidak diketahui)"
-    )
+    tgl_mulai = format_date(lot.get("startDate"))
+    tgl_selesai = format_date(lot.get("auctionDate"))
+    harga = int(lot.get("price", 0))
 
-    link = f"https://lelang.go.id/kpknl/{lot.get('unitKerjaId')}/detail-auction/{lot_id}"
+    link = f"https://lelang.go.id/kpknl/{lot.get('officeId')}/detail-auction/{lot_id}"
 
     caption = (
         f"🔔 <b>{title}</b>\n"
         f"📍 Lokasi: {lokasi}\n"
         f"🏢 Instansi: {instansi}\n"
         f"👤 Penjual: {penjual}\n"
-        f"🗓 {start} → {end}\n"
+        f"🗓 {tgl_mulai} → {tgl_selesai}\n"
         f"💰 Nilai limit: Rp {harga:,}\n"
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
-    # ambil minimal 1 foto kalau ada
-    photos = lot.get("fotoLotLelang") or lot.get("photos") or []
+    photos = lot.get("photos", [])
     photo_url = None
+    if photos:
+        p = photos[0]
+        file_url = p.get("file", {}).get("fileUrl") if isinstance(p, dict) else None
+        if file_url:
+            # API kadang relatif → tambahkan domain
+            if file_url.startswith("http"):
+                photo_url = file_url
+            else:
+                photo_url = f"https://api.lelang.go.id{file_url}"
 
-    if photos and isinstance(photos, list):
-        first = photos[0]
-        if isinstance(first, dict):
-            photo_url = (
-                first.get("fileUrl")
-                or (first.get("file", {}) or {}).get("fileUrl")
-            )
-        elif isinstance(first, str):
-            photo_url = first
-
-        if photo_url and not photo_url.startswith("http"):
-            photo_url = "https://file.lelang.go.id" + photo_url
-
-    # kirim ke Telegram
+    # Kirim dengan foto kalau ada
     if photo_url:
-        requests.post(
+        resp = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
             data={
                 "chat_id": TELEGRAM_CHAT_ID,
                 "photo": photo_url,
                 "caption": caption,
-                "parse_mode": "HTML"
+                "parse_mode": "HTML",
             },
         )
-        print(f"[INFO] Lot {lot_id} terkirim dengan foto")
+        print(f"[DEBUG] Telegram resp: {resp.status_code} {resp.text}")
+        if resp.status_code == 200:
+            print(f"[INFO] Lot {lot_id} terkirim dengan foto")
+        else:
+            print(f"[ERROR] Lot {lot_id} gagal kirim foto")
     else:
-        requests.post(
+        # fallback: teks saja
+        resp = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             data={
                 "chat_id": TELEGRAM_CHAT_ID,
                 "text": caption,
-                "parse_mode": "HTML"
+                "parse_mode": "HTML",
             },
         )
-        print(f"[INFO] Lot {lot_id} terkirim tanpa foto")
+        print(f"[DEBUG] Telegram resp: {resp.status_code} {resp.text}")
+        if resp.status_code == 200:
+            print(f"[INFO] Lot {lot_id} terkirim tanpa foto")
+        else:
+            print(f"[ERROR] Lot {lot_id} gagal kirim pesan")
 
 # =========================================
 # MAIN
