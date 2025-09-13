@@ -1,6 +1,5 @@
 # Dependencies utama
 requests
-python-telegram-bot==13.15
 python-dotenv
 
 # Kalau nanti kamu mau pakai Flask (versi web/server)
