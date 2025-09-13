@@ -1,103 +1,138 @@
-import requests
-import json
-import os
-import datetime
-import telegram
-from telegram import InputMediaPhoto
+# =========================================
+# APP.PY - BOT MONITOR LELANG (CRON MODE)
+# =========================================
+import requests, json, os
+from dotenv import load_dotenv
+from datetime import datetime
 
-# Konfigurasi
-API_URL = "https://example.com/api"  # ganti dengan API asli
+# =========================================
+# LOAD ENV
+# =========================================
+load_dotenv()
+
+API_URL = "https://api.lelang.go.id/v1/auctions"
+KEYWORD_INSTANSI = os.getenv("KEYWORD_INSTANSI", "KPKNL Surakarta").lower()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-
-bot = telegram.Bot(token=TELEGRAM_TOKEN)
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 SEEN_FILE = "seen_api.json"
 
+if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    raise Exception("Set TELEGRAM_TOKEN dan TELEGRAM_CHAT_ID di environment variables!")
 
+# =========================================
+# HELPERS
+# =========================================
 def load_seen():
-    if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE, "r") as f:
-            try:
-                return set(json.load(f))
-            except:
-                return set()
-    return set()
-
+    try:
+        with open(SEEN_FILE, "r", encoding="utf-8") as f:
+            seen = set(json.load(f))
+        print(f"[INFO] Loaded {len(seen)} lot dari seen_api.json")
+        return seen
+    except FileNotFoundError:
+        print("[INFO] seen_api.json tidak ditemukan, membuat baru")
+        return set()
+    except Exception as e:
+        print(f"[ERROR] Gagal load seen_api.json: {e}")
+        return set()
 
 def save_seen(seen):
-    with open(SEEN_FILE, "w") as f:
-        json.dump(list(seen), f)
-
-
-def fetch_data():
     try:
-        print("[INFO] Mulai cek API...", flush=True)
-        r = requests.get(API_URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        print(f"[DEBUG] Status API: {r.status_code}", flush=True)
-        print(f"[DEBUG] Respon mentah (200 char): {r.text[:200]}", flush=True)
-
-        data = r.json().get("data", [])
-        print(f"[INFO] Ditemukan {len(data)} lot di API", flush=True)
-        return data
+        with open(SEEN_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(seen), f, ensure_ascii=False, indent=2)
+        print(f"[INFO] Disimpan {len(seen)} lot ke seen_api.json")
     except Exception as e:
-        import traceback
-        print(f"[ERROR] Gagal ambil data API: {e}", flush=True)
-        traceback.print_exc()
-        return []
+        print(f"[ERROR] Gagal simpan seen_api.json: {e}")
 
+def format_date(d):
+    try:
+        dt = datetime.fromisoformat(d)
+        return dt.strftime("%d %b %Y")
+    except Exception:
+        return d[:10] if d else "-"
 
-def send_to_telegram(lot):
-    lot_id = lot.get("id")
-    title = lot.get("title", "Tanpa Judul")
-    lokasi = lot.get("lokasi", "Tidak diketahui")
-    images = lot.get("images", [])
+# =========================================
+# TELEGRAM
+# =========================================
+def send_message(lot):
+    """Kirim notifikasi lot ke Telegram, termasuk semua foto via URL publik"""
+    lot_id = str(lot.get("id"))
+    title = lot.get("title", "(tanpa judul)")
+    lokasi = lot.get("city", "(tidak diketahui)")
+    tgl = lot.get("auctionDate", "-")
+    harga = int(lot.get("price", 0))
 
-    caption = f"Lot baru: {title}\nLokasi: {lokasi}"
+    link = f"https://www.lelang.go.id/lot/{lot_id}"
 
-    if images:
-        media_group = []
-        for i, img_url in enumerate(images[:5]):
-            try:
-                file_url = f"{img_url}"
-                if i == 0:
-                    media_group.append(InputMediaPhoto(media=file_url, caption=caption))
-                else:
-                    media_group.append(InputMediaPhoto(media=file_url))
-            except Exception as e:
-                print(f"[WARN] Gagal parse gambar: {e}", flush=True)
+    caption = (
+        f"🔔 <b>{title}</b>\n"
+        f"📍 Lokasi: {lokasi}\n"
+        f"🗓 Tanggal lelang: {tgl}\n"
+        f"💰 Harga awal: Rp {harga:,}\n"
+        f"🔗 <a href='{link}'>Lihat detail lelang</a>"
+    )
 
-        try:
-            bot.send_media_group(chat_id=CHAT_ID, media=media_group)
-            print(f"[INFO] ✅ Terkirim lot {lot_id} dengan album foto", flush=True)
-        except Exception as e:
-            print(f"[WARN] Gagal kirim album, fallback caption: {e}", flush=True)
-            bot.send_message(chat_id=CHAT_ID, text=caption)
-    else:
-        bot.send_message(chat_id=CHAT_ID, text=caption)
-        print(f"[INFO] ✅ Terkirim lot {lot_id} tanpa gambar", flush=True)
+    photos = lot.get("photos", [])
 
+    if not photos:
+        # fallback teks kalau ga ada foto
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"},
+        )
+        print(f"[INFO] Lot {lot_id} terkirim tanpa foto")
+        return
 
+    # kirim foto pertama dengan caption
+    first_url = photos[0].get("file", {}).get("fileUrl") if isinstance(photos[0], dict) else None
+    if first_url and not first_url.startswith("http"):
+        first_url = f"https://file.lelang.go.id{first_url}"
+
+    if first_url:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+            data={"chat_id": TELEGRAM_CHAT_ID, "photo": first_url, "caption": caption, "parse_mode": "HTML"},
+        )
+        print(f"[INFO] Lot {lot_id} terkirim dengan foto pertama")
+
+    # kirim foto sisanya tanpa caption
+    for p in photos[1:]:
+        file_url = p.get("file", {}).get("fileUrl") if isinstance(p, dict) else None
+        if file_url and not file_url.startswith("http"):
+            file_url = f"https://file.lelang.go.id{file_url}"
+        if file_url:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+                data={"chat_id": TELEGRAM_CHAT_ID, "photo": file_url},
+            )
+
+# =========================================
+# MAIN
+# =========================================
 def main():
-    print(f"[{datetime.datetime.now()}] Bot mulai jalan...", flush=True)
+    print(f"[{datetime.now()}] Bot mulai jalan...")
+
+    try:
+        r = requests.get(API_URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        data = r.json().get("data", [])
+    except Exception as e:
+        print(f"[ERROR] Gagal ambil data dari API: {e}")
+        return
 
     seen = load_seen()
-    print(f"[DEBUG] Jumlah lot yang sudah pernah dikirim: {len(seen)}", flush=True)
 
-    data = fetch_data()
-    baru = 0
-
+    new_count = 0
     for lot in data:
-        lot_id = lot.get("id")
-        if lot_id not in seen:
-            send_to_telegram(lot)
-            seen.add(lot_id)
-            baru += 1
+        lot_id = str(lot.get("id"))
+        if not lot_id or lot_id in seen:
+            continue
+
+        send_message(lot)
+        seen.add(lot_id)
+        new_count += 1
 
     save_seen(seen)
-    print(f"[INFO] {baru} lot baru terkirim", flush=True)
-    print(f"[INFO] Disimpan {len(seen)} lot ke {SEEN_FILE}", flush=True)
-    print(f"[{datetime.datetime.now()}] Bot selesai cek.", flush=True)
-
+    print(f"[INFO] {new_count} lot baru terkirim")
+    print(f"[{datetime.now()}] Bot selesai cek.")
 
 if __name__ == "__main__":
     main()
