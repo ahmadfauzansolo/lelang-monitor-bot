@@ -1,10 +1,10 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (CRON MODE - FIX)
+# APP.PY - BOT MONITOR LELANG (CRON MODE)
 # =========================================
 # Fitur:
 # - Monitor lot lelang dari API lelang.go.id
 # - Kirim notifikasi ke Telegram jika ada lot baru
-# - Menampilkan semua foto lot (album Telegram)
+# - Menampilkan semua foto lot (album Telegram, fallback upload manual)
 # - Menampilkan nilai limit dan uang jaminan
 # - Mencegah duplikat via seen_api.json
 # - Log info tiap step
@@ -74,54 +74,66 @@ def send_message(lot):
     nilai_limit = int(lot.get("nilaiLimit", 0))
     uang_jaminan = int(lot.get("uangJaminan", 0))
 
-    photos = lot.get("photos", [])
-    media = []
+    caption = (
+        f"🔔 <b>{title}</b>\n"
+        f"📍 Lokasi: {lokasi}\n"
+        f"🏢 Instansi: {instansi}\n"
+        f"🗓 {start} → {end}\n"
+        f"💰 Nilai limit: Rp {nilai_limit:,}\n"
+        f"💵 Uang jaminan: Rp {uang_jaminan:,}\n"
+        f"🔗 <a href='{link}'>Lihat detail lelang</a>"
+    )
 
+    photos = lot.get("photos", [])
+    if not photos:
+        # fallback teks kalau ga ada foto
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"},
+        )
+        return
+
+    # 🔹 coba kirim album via URL langsung
+    media = []
     for i, p in enumerate(photos):
         file_url = p.get("file", {}).get("fileUrl")
         if not file_url:
             continue
-        url = f"https://api.lelang.go.id{file_url}"
+        photo_url = f"https://api.lelang.go.id{file_url}"
+        media.append({
+            "type": "photo",
+            "media": photo_url,
+            "caption": caption if i == 0 else "",
+            "parse_mode": "HTML"
+        })
 
-        if i == 0:  # hanya foto pertama yang ada caption
-            caption = (
-                f"🔔 <b>{title}</b>\n"
-                f"📍 Lokasi: {lokasi}\n"
-                f"🏢 Instansi: {instansi}\n"
-                f"🗓 {start} → {end}\n"
-                f"💰 Nilai limit: Rp {nilai_limit:,}\n"
-                f"💵 Uang jaminan: Rp {uang_jaminan:,}\n"
-                f"🔗 <a href='{link}'>Lihat detail lelang</a>"
-            )
-            media.append({"type": "photo", "media": url, "caption": caption, "parse_mode": "HTML"})
-        else:
-            media.append({"type": "photo", "media": url})
+    res = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup",
+        json={"chat_id": TELEGRAM_CHAT_ID, "media": media}
+    )
 
-    try:
-        if media:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup"
-            res = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "media": media})
-        else:
-            text = (
-                f"🔔 <b>{title}</b>\n"
-                f"📍 Lokasi: {lokasi}\n"
-                f"🏢 Instansi: {instansi}\n"
-                f"🗓 {start} → {end}\n"
-                f"💰 Nilai limit: Rp {nilai_limit:,}\n"
-                f"💵 Uang jaminan: Rp {uang_jaminan:,}\n"
-                f"🔗 <a href='{link}'>Lihat detail lelang</a>"
-            )
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            res = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"})
+    if res.status_code == 200:
+        print(f"[INFO] Album berhasil dikirim ({len(media)} foto)")
+        return True
+    else:
+        print(f"[WARN] Gagal album via URL: {res.text}, coba upload manual...")
 
-        if res.status_code == 200:
-            print(f"[INFO] Lot '{title}' berhasil dikirim ke Telegram")
-            return True
-        else:
-            print(f"[ERROR] Gagal kirim ke Telegram: {res.status_code}, {res.text}")
-            return False
-    except Exception as e:
-        print(f"[ERROR] Exception kirim Telegram: {e}")
+        # 🔹 fallback: upload foto satu-satu
+        for i, p in enumerate(photos):
+            file_url = p.get("file", {}).get("fileUrl")
+            if not file_url:
+                continue
+            photo_url = f"https://api.lelang.go.id{file_url}"
+
+            try:
+                img = requests.get(photo_url, timeout=10)
+                if img.status_code == 200:
+                    files = {"photo": ("img.jpg", img.content)}
+                    data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption if i == 0 else "", "parse_mode": "HTML"}
+                    ru = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data, files=files)
+                    print(f"[INFO] Foto {i+1} upload status {ru.status_code}")
+            except Exception as e:
+                print(f"[ERROR] Foto {i+1} gagal: {e}")
         return False
 
 # =========================================
