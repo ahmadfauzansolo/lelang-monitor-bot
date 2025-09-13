@@ -1,15 +1,6 @@
 # =========================================
 # APP.PY - BOT MONITOR LELANG (CRON MODE)
 # =========================================
-# Fitur:
-# - Monitor lot lelang dari API lelang.go.id
-# - Kirim notifikasi ke Telegram jika ada lot baru
-# - Menampilkan semua foto lot (album Telegram, fallback upload manual)
-# - Menampilkan nilai limit dan uang jaminan
-# - Mencegah duplikat via seen_api.json
-# - Log info tiap step
-# =========================================
-
 import requests, json, os
 from dotenv import load_dotenv
 from datetime import datetime
@@ -57,7 +48,7 @@ def format_date(d):
         dt = datetime.fromisoformat(d)
         return dt.strftime("%d %b %Y")
     except Exception:
-        return d[:10]
+        return d[:10] if d else "-"
 
 # =========================================
 # TELEGRAM
@@ -84,7 +75,15 @@ def send_message(lot):
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
-    photos = lot.get("photos", [])
+    photos = []
+    # beberapa lot pakai "photos", kadang "gambar", kadang "foto"
+    if "photos" in lot:
+        photos = lot["photos"]
+    elif "gambar" in lot:
+        photos = lot["gambar"]
+    elif "foto" in lot:
+        photos = lot["foto"]
+
     if not photos:
         # fallback teks kalau ga ada foto
         requests.post(
@@ -96,74 +95,12 @@ def send_message(lot):
     # 🔹 coba kirim album via URL langsung
     media = []
     for i, p in enumerate(photos):
-        file_url = p.get("file", {}).get("fileUrl")
+        file_url = (
+            p.get("file", {}).get("fileUrl")
+            or p.get("fileUrl")
+            or p.get("url")
+        )
         if not file_url:
             continue
-        photo_url = f"https://api.lelang.go.id{file_url}"
-        media.append({
-            "type": "photo",
-            "media": photo_url,
-            "caption": caption if i == 0 else "",
-            "parse_mode": "HTML"
-        })
-
-    res = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup",
-        json={"chat_id": TELEGRAM_CHAT_ID, "media": media}
-    )
-
-    if res.status_code == 200:
-        print(f"[INFO] Album berhasil dikirim ({len(media)} foto)")
-        return True
-    else:
-        print(f"[WARN] Gagal album via URL: {res.text}, coba upload manual...")
-
-        # 🔹 fallback: upload foto satu-satu
-        for i, p in enumerate(photos):
-            file_url = p.get("file", {}).get("fileUrl")
-            if not file_url:
-                continue
-            photo_url = f"https://api.lelang.go.id{file_url}"
-
-            try:
-                img = requests.get(photo_url, timeout=10)
-                if img.status_code == 200:
-                    files = {"photo": ("img.jpg", img.content)}
-                    data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption if i == 0 else "", "parse_mode": "HTML"}
-                    ru = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data, files=files)
-                    print(f"[INFO] Foto {i+1} upload status {ru.status_code}")
-            except Exception as e:
-                print(f"[ERROR] Foto {i+1} gagal: {e}")
-        return False
-
-# =========================================
-# MAIN FUNCTION
-# =========================================
-def monitor_lelang():
-    seen = load_seen()
-    print("[INFO] Mulai cek API...")
-    try:
-        resp = requests.get(API_URL)
-        if resp.status_code == 200:
-            data = resp.json().get("data", [])
-            print(f"[INFO] Ditemukan {len(data)} lot di API")
-            for lot in data:
-                if KEYWORD_INSTANSI in lot.get("namaUnitKerja", "").lower():
-                    lot_id = lot.get("id")
-                    if lot_id not in seen:
-                        print(f"[INFO] Lot baru: {lot.get('namaLotLelang')}")
-                        if send_message(lot):
-                            seen.add(lot_id)
-                            save_seen(seen)
-                    else:
-                        print(f"[INFO] Sudah ada: {lot.get('namaLotLelang')}")
-        else:
-            print(f"[ERROR] Gagal fetch API: {resp.status_code}")
-    except Exception as e:
-        print(f"[ERROR] Exception monitor_lelang: {e}")
-
-# =========================================
-# ENTRY POINT
-# =========================================
-if __name__ == "__main__":
-    monitor_lelang()
+        if not file_url.startswith("http"):
+            file_url = f"https://ap_
