@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG FINAL TANPA FILTER
+# APP.PY - BOT MONITOR LELANG FINAL (RAPIH)
 # =========================================
 import requests, os
 from dotenv import load_dotenv
@@ -19,6 +19,17 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Set TELEGRAM_TOKEN dan TELEGRAM_CHAT_ID di environment variables!")
 
 # =========================================
+# HELPERS
+# =========================================
+def format_date(d: str) -> str:
+    """Ubah ISO date ke format '12 Sep 2025'"""
+    try:
+        dt = datetime.fromisoformat(d.replace("Z", ""))
+        return dt.strftime("%d %b %Y")
+    except Exception:
+        return d[:10] if d else "-"
+
+# =========================================
 # TELEGRAM
 # =========================================
 def send_message(lot):
@@ -26,8 +37,9 @@ def send_message(lot):
     title = lot.get("namaLotLelang", "(tanpa judul)")
     lokasi = lot.get("namaLokasi", "(tidak diketahui)")
     instansi = lot.get("namaUnitKerja", "(tidak diketahui)")
-    start = lot.get("tglMulaiLelang", "-")[:10]
-    end = lot.get("tglSelesaiLelang", "-")[:10]
+    penjual = lot.get("namaPenjual", "(tidak diketahui)")
+    start = format_date(lot.get("tglMulaiLelang", "-"))
+    end = format_date(lot.get("tglSelesaiLelang", "-"))
     harga = int(lot.get("nilaiLimit", 0))
 
     link = f"https://lelang.go.id/kpknl/{lot.get('unitKerjaId')}/detail-auction/{lot_id}"
@@ -37,9 +49,10 @@ def send_message(lot):
         image_url = lot["fotoLotLelang"][0]["url"]
 
     caption = (
-        f"🔔 <b>{title}</b>\n"
+        f"{title}\n"
         f"📍 Lokasi: {lokasi}\n"
         f"🏢 Instansi: {instansi}\n"
+        f"👤 Penjual: {penjual}\n"
         f"🗓 {start} → {end}\n"
         f"💰 Nilai limit: Rp {harga:,}\n"
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
