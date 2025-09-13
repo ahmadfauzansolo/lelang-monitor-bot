@@ -103,4 +103,76 @@ def send_message(lot):
         if not file_url:
             continue
         if not file_url.startswith("http"):
-            file_url = f"https://ap_
+            file_url = f"https://api.lelang.go.id{file_url}"
+        media.append({
+            "type": "photo",
+            "media": file_url,
+            "caption": caption if i == 0 else "",
+            "parse_mode": "HTML"
+        })
+
+    if not media:
+        print("[WARN] Tidak ada URL foto yang valid")
+        return
+
+    res = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup",
+        json={"chat_id": TELEGRAM_CHAT_ID, "media": media}
+    )
+
+    if res.status_code == 200:
+        print(f"[INFO] Album berhasil dikirim ({len(media)} foto)")
+        return True
+    else:
+        print(f"[WARN] Gagal album via URL: {res.text}, coba upload manual...")
+
+        # 🔹 fallback: upload foto satu-satu
+        for i, m in enumerate(media):
+            try:
+                img = requests.get(m["media"], timeout=10)
+                if img.status_code == 200:
+                    files = {"photo": ("img.jpg", img.content)}
+                    data = {"chat_id": TELEGRAM_CHAT_ID, "caption": m["caption"], "parse_mode": "HTML"}
+                    ru = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data, files=files)
+                    print(f"[INFO] Foto {i+1} upload status {ru.status_code}")
+            except Exception as e:
+                print(f"[ERROR] Foto {i+1} gagal: {e}")
+        return False
+
+# =========================================
+# MAIN FUNCTION
+# =========================================
+def monitor_lelang():
+    seen = load_seen()
+    print("[INFO] Mulai cek API...")
+    try:
+        resp = requests.get(API_URL)
+        if resp.status_code == 200:
+            data = resp.json().get("data", [])
+            print(f"[INFO] Ditemukan {len(data)} lot di API")
+
+            if data:
+                print("===== SAMPLE JSON LOT =====")
+                print(json.dumps(data[0], indent=2, ensure_ascii=False))
+                print("===== END SAMPLE =====")
+
+            for lot in data:
+                if KEYWORD_INSTANSI in lot.get("namaUnitKerja", "").lower():
+                    lot_id = lot.get("id")
+                    if lot_id not in seen:
+                        print(f"[INFO] Lot baru: {lot.get('namaLotLelang')}")
+                        if send_message(lot):
+                            seen.add(lot_id)
+                            save_seen(seen)
+                    else:
+                        print(f"[INFO] Sudah ada: {lot.get('namaLotLelang')}")
+        else:
+            print(f"[ERROR] Gagal fetch API: {resp.status_code}")
+    except Exception as e:
+        print(f"[ERROR] Exception monitor_lelang: {e}")
+
+# =========================================
+# ENTRY POINT
+# =========================================
+if __name__ == "__main__":
+    monitor_lelang()
