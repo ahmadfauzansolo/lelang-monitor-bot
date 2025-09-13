@@ -1,0 +1,14 @@
+services:
+  - type: cron
+    name: lelang-monitor-bot
+    env: python
+    buildCommand: ""
+    startCommand: "python app.py"
+    schedule: "*/30 * * * *"
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: KEYWORD_INSTANSI
+        value: "KPKNL Surakarta"
