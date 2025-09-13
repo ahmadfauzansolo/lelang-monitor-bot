@@ -1,7 +1,7 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (CRON MODE)
+# APP_TEST.PY - BOT MONITOR LELANG (TEST MODE)
 # =========================================
-import requests, json, os
+import requests, os
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -11,10 +11,8 @@ from datetime import datetime
 load_dotenv()
 
 API_URL = "https://api.lelang.go.id/v1/auctions"
-KEYWORD_INSTANSI = os.getenv("KEYWORD_INSTANSI", "KPKNL Surakarta").lower()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-SEEN_FILE = "seen_api.json"
 
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Set TELEGRAM_TOKEN dan TELEGRAM_CHAT_ID di environment variables!")
@@ -22,27 +20,6 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
 # =========================================
 # HELPERS
 # =========================================
-def load_seen():
-    try:
-        with open(SEEN_FILE, "r", encoding="utf-8") as f:
-            seen = set(json.load(f))
-        print(f"[INFO] Loaded {len(seen)} lot dari seen_api.json")
-        return seen
-    except FileNotFoundError:
-        print("[INFO] seen_api.json tidak ditemukan, membuat baru")
-        return set()
-    except Exception as e:
-        print(f"[ERROR] Gagal load seen_api.json: {e}")
-        return set()
-
-def save_seen(seen):
-    try:
-        with open(SEEN_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(seen), f, ensure_ascii=False, indent=2)
-        print(f"[INFO] Disimpan {len(seen)} lot ke seen_api.json")
-    except Exception as e:
-        print(f"[ERROR] Gagal simpan seen_api.json: {e}")
-
 def format_date(d):
     try:
         dt = datetime.fromisoformat(d)
@@ -109,7 +86,7 @@ def send_message(lot):
 # MAIN
 # =========================================
 def main():
-    print(f"[{datetime.now()}] Bot mulai jalan...")
+    print(f"[{datetime.now()}] Bot TEST mulai jalan...")
 
     try:
         r = requests.get(API_URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
@@ -118,21 +95,11 @@ def main():
         print(f"[ERROR] Gagal ambil data dari API: {e}")
         return
 
-    seen = load_seen()
-
-    new_count = 0
+    print(f"[INFO] Total {len(data)} lot ditemukan, semua akan dikirim (test mode)")
     for lot in data:
-        lot_id = str(lot.get("id"))
-        if not lot_id or lot_id in seen:
-            continue
-
         send_message(lot)
-        seen.add(lot_id)
-        new_count += 1
 
-    save_seen(seen)
-    print(f"[INFO] {new_count} lot baru terkirim")
-    print(f"[{datetime.now()}] Bot selesai cek.")
+    print(f"[{datetime.now()}] Bot TEST selesai cek.")
 
 if __name__ == "__main__":
     main()
