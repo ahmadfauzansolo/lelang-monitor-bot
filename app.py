@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (CRON MODE)
+# APP.PY - BOT MONITOR LELANG (CRON MODE - FIX)
 # =========================================
 # Fitur:
 # - Monitor lot lelang dari API lelang.go.id
@@ -82,8 +82,8 @@ def send_message(lot):
         if not file_url:
             continue
         url = f"https://api.lelang.go.id{file_url}"
-        caption = None
-        if i == 0:
+
+        if i == 0:  # hanya foto pertama yang ada caption
             caption = (
                 f"🔔 <b>{title}</b>\n"
                 f"📍 Lokasi: {lokasi}\n"
@@ -93,7 +93,9 @@ def send_message(lot):
                 f"💵 Uang jaminan: Rp {uang_jaminan:,}\n"
                 f"🔗 <a href='{link}'>Lihat detail lelang</a>"
             )
-        media.append({"type": "photo", "media": url, "caption": caption, "parse_mode": "HTML"})
+            media.append({"type": "photo", "media": url, "caption": caption, "parse_mode": "HTML"})
+        else:
+            media.append({"type": "photo", "media": url})
 
     try:
         if media:
