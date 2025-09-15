@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FINAL + LOG)
+# APP.PY - BOT MONITOR LELANG (FINAL + DETAIL)
 # =========================================
 import requests, json, os
 from dotenv import load_dotenv
@@ -45,7 +45,7 @@ def save_seen(seen):
 def format_date(d):
     try:
         dt = datetime.fromisoformat(d)
-        return dt.strftime("%d %b %Y")
+        return dt.strftime("%d %b %Y %H:%M")
     except Exception:
         return d[:10] if d else "-"
 
@@ -54,13 +54,32 @@ def format_date(d):
 # =========================================
 def send_message(lot):
     lot_id = lot.get("lotLelangId") or lot.get("id")
+    if not lot_id:
+        return False
+
+    # --- Ambil detail lot ---
+    try:
+        detail_url = f"https://api.lelang.go.id/api/v1/detail-lot-lelang/{lot_id}"
+        detail = requests.get(detail_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"}).json().get("data", {})
+    except Exception as e:
+        print(f"[ERROR] Gagal ambil detail lot {lot_id}: {e}")
+        detail = {}
+
+    # --- Data dasar ---
     title = lot.get("namaLotLelang", "(tanpa judul)")
     lokasi = lot.get("namaLokasi", "(tidak diketahui)")
     instansi = lot.get("namaUnitKerja", "(tidak diketahui)")
-    penjual = lot.get("namaPenjual", "(tidak diketahui)")
+    penjual = detail.get("namaPenjual") or lot.get("namaPenjual", "(tidak diketahui)")
     start = format_date(lot.get("tglMulaiLelang", ""))
     end = format_date(lot.get("tglSelesaiLelang", ""))
     nilai_limit = int(lot.get("nilaiLimit", 0))
+
+    # --- Data tambahan dari detail ---
+    uang_jaminan = int(detail.get("uangJaminan", 0))
+    cara_penawaran = detail.get("caraPenawaran", "-")
+    kode_lot = detail.get("kodeLotLelang", "-")
+    batas_setor = format_date(detail.get("batasAkhirSetorUangJaminan", ""))
+
     link = f"https://lelang.go.id/kpknl/{lot.get('unitKerjaId')}/detail-auction/{lot_id}"
 
     caption = (
@@ -70,10 +89,14 @@ def send_message(lot):
         f"👤 Penjual: {penjual}\n"
         f"🗓 {start} → {end}\n"
         f"💰 Nilai limit: Rp {nilai_limit:,}\n"
+        f"💵 Uang jaminan: Rp {uang_jaminan:,}\n"
+        f"⚙️ Cara penawaran: {cara_penawaran}\n"
+        f"🔑 Kode Lot: {kode_lot}\n"
+        f"⏳ Batas setor jaminan: {batas_setor}\n"
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
-    # ambil foto minimal 1
+    # --- Kirim ke Telegram ---
     photos = lot.get("photos", [])
     if photos:
         photo_url = photos[0].get("file", {}).get("fileUrl") or photos[0].get("fileUrl")
@@ -90,9 +113,10 @@ def send_message(lot):
         except Exception as e:
             print(f"[ERROR] Gagal kirim foto lot {lot_id}: {e}")
 
-    # fallback tanpa foto
-    res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                        data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"})
+    res = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"}
+    )
     print(f"[INFO] Lot {lot_id} terkirim tanpa foto, status {res.status_code}")
     return False
 
@@ -112,15 +136,10 @@ def main():
 
     seen = load_seen()
     new_count = 0
-    old_count = 0
 
     for lot in data:
         lot_id = lot.get("lotLelangId") or lot.get("id")
-        if not lot_id:
-            continue
-
-        if lot_id in seen:
-            old_count += 1
+        if not lot_id or lot_id in seen:
             continue
 
         send_message(lot)
@@ -128,12 +147,7 @@ def main():
         new_count += 1
 
     save_seen(seen)
-
-    if new_count > 0:
-        print(f"[INFO] {new_count} lot baru terkirim, {old_count} lot lama dilewati")
-    else:
-        print(f"[INFO] Lot lama ditemukan {old_count}, tidak ada tambahan lot baru, tidak dikirim")
-
+    print(f"[INFO] {new_count} lot baru terkirim")
     print(f"[{datetime.now()}] Bot selesai kirim semua lot.")
 
 if __name__ == "__main__":
