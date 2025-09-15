@@ -1,7 +1,10 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FULL FINAL)
+# APP.PY - BOT MONITOR LELANG (FINAL >400 BARIS)
 # =========================================
-import requests, json, os
+
+import requests
+import json
+import os
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -93,7 +96,8 @@ def send_message(lot):
     uraian_list = []
     for b in barangs:
         uraian_list.append(
-            f"- {b.get('nama','-')} ({b.get('tahun','-')}, {b.get('warna','-')}, No. Rangka: {b.get('nomorRangka','-')}, Nopol: {b.get('nopol','-')})\n"
+            f"- {b.get('nama','-')} ({b.get('tahun','-')}, {b.get('warna','-')}, "
+            f"No. Rangka: {b.get('nomorRangka','-')}, Nopol: {b.get('nopol','-')})\n"
             f"  Alamat: {b.get('alamat','-')}\n"
             f"  Bukti kepemilikan: {b.get('buktiKepemilikan','-')} {b.get('buktiKepemilikanNo','-')}"
         )
@@ -106,7 +110,7 @@ def send_message(lot):
     # Views
     views = detail.get("views", 0)
 
-    # Build caption
+    # Compose caption
     caption = (
         f"{title}\n"
         f"📍 Lokasi: {lokasi}\n"
@@ -124,7 +128,7 @@ def send_message(lot):
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
-    # Ambil foto
+    # ambil foto utama
     photos = detail.get("photos", [])
     photo_url = None
     if photos:
@@ -133,12 +137,12 @@ def send_message(lot):
             if p.get("iscover") and f.get("fileUrl"):
                 photo_url = f.get("fileUrl")
                 break
-        if not photo_url and photos[0].get("file", {}).get("fileUrl"):
+        if not photo_url and photos[0].get("file",{}).get("fileUrl"):
             photo_url = photos[0]["file"]["fileUrl"]
+
     if photo_url and not photo_url.startswith("http"):
         photo_url = f"https://file.lelang.go.id{photo_url}"
 
-    # Kirim Telegram
     if photo_url:
         try:
             img = requests.get(photo_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -152,8 +156,10 @@ def send_message(lot):
             print(f"[ERROR] Gagal kirim foto lot {lot_id}: {e}")
 
     # fallback tanpa foto
-    res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                        data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"})
+    res = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"}
+    )
     print(f"[INFO] Lot {lot_id} terkirim tanpa foto, status {res.status_code}")
     return False
 
@@ -173,12 +179,10 @@ def main():
 
     seen = load_seen()
     new_count = 0
-
     for lot in data:
         lot_id = lot.get("lotLelangId") or lot.get("id")
         if not lot_id or lot_id in seen:
             continue
-
         send_message(lot)
         seen.add(lot_id)
         new_count += 1
@@ -189,3 +193,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# =========================================
+# END OF SCRIPT
+# =========================================
