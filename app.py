@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FINAL + SCREENSHOT)
+# APP.PY - BOT MONITOR LELANG (FINAL UPDATED)
 # =========================================
 import requests, json, os
 from dotenv import load_dotenv
@@ -11,6 +11,7 @@ from datetime import datetime
 load_dotenv()
 
 API_URL = "https://api.lelang.go.id/api/v1/landing-page-kpknl/6705ef6e-f64f-11ed-b3e2-5620a0c2ec5a/katalog-lot-lelang?namakategori[]=Mobil&namakategori[]=Motor"
+DETAIL_URL = "https://api.lelang.go.id/api/v1/landing-page/info/{}"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 SEEN_FILE = "seen_api.json"
@@ -49,39 +50,76 @@ def format_date(d):
     except Exception:
         return d[:10] if d else "-"
 
+def fetch_detail(lot_id):
+    try:
+        r = requests.get(DETAIL_URL.format(lot_id), timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        data = r.json().get("data", {})
+        return data
+    except Exception as e:
+        print(f"[ERROR] Gagal ambil detail lot {lot_id}: {e}")
+        return None
+
 # =========================================
 # TELEGRAM
 # =========================================
-def send_photo(img_bytes, caption=""):
-    files = {"photo": ("img.jpg", img_bytes)}
-    data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
-    res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data, files=files)
-    return res
-
-def send_message(lot):
+def send_message(lot, detail):
     lot_id = lot.get("lotLelangId") or lot.get("id")
-    title = lot.get("namaLotLelang", "(tanpa judul)")
-    lokasi = lot.get("namaLokasi", "(tidak diketahui)")
-    instansi = lot.get("namaUnitKerja", "(tidak diketahui)")
-    penjual = lot.get("namaPenjual", "(tidak diketahui)")
-    start = format_date(lot.get("tglMulaiLelang", ""))
-    end = format_date(lot.get("tglSelesaiLelang", ""))
-    nilai_limit = int(lot.get("nilaiLimit", 0))
-    link = f"https://lelang.go.id/kpknl/{lot.get('unitKerjaId')}/detail-auction/{lot_id}"
+    title = lot.get("namaLotLelang") or detail.get("namaLotLelang") or "(tanpa judul)"
+    lokasi = lot.get("namaLokasi") or detail.get("namaLokasi") or "(tidak diketahui)"
+    instansi = lot.get("namaUnitKerja") or detail.get("namaUnitKerja") or "(tidak diketahui)"
+    start = format_date(lot.get("tglMulaiLelang") or detail.get("tglMulaiLelang", ""))
+    end = format_date(lot.get("tglSelesaiLelang") or detail.get("tglSelesaiLelang", ""))
+    nilai_limit = int(lot.get("nilaiLimit") or detail.get("nilaiLimit", 0))
+    link = f"https://lelang.go.id/kpknl/{lot.get('unitKerjaId') or detail.get('unitKerjaId')}/detail-auction/{lot_id}"
+
+    # Cara penawaran
+    cara_penawaran = detail.get("caraPenawaran", "(tidak diketahui)")
+
+    # Uraian barang
+    barangs = detail.get("content", {}).get("barangs", [])
+    uraian_list = []
+    for b in barangs:
+        uraian_list.append(
+            f"- {b.get('nama','')} ({b.get('tahun','')}, {b.get('warna','')}, {b.get('nopol','')})\n"
+            f"  Alamat: {b.get('alamat','')}\n"
+            f"  Bukti kepemilikan: {b.get('buktiKepemilikan','')} {b.get('buktiKepemilikanNo','')}"
+        )
+    uraian = "\n".join(uraian_list) if uraian_list else "-"
+
+    # Penjual
+    seller = detail.get("content", {}).get("seller", {})
+    penjual = seller.get("namaPenjual") or seller.get("namaOrganisasiPenjual") or "(tidak diketahui)"
+    telepon_penjual = seller.get("nomorTelepon", "")
+    alamat_penjual = seller.get("alamat", "")
+    kota_penjual = seller.get("namaKota", "")
+    prov_penjual = seller.get("namaProvinsi", "")
+
+    # Organizer
+    organizer = detail.get("content", {}).get("organizer", {})
+    organizer_info = f"{organizer.get('namaUnitKerja','')} - {organizer.get('namaBank','')}"
+
+    # Jumlah view
+    views = detail.get("views", 0)
 
     caption = (
         f"{title}\n"
         f"📍 Lokasi: {lokasi}\n"
         f"🏢 Instansi: {instansi}\n"
         f"👤 Penjual: {penjual}\n"
+        f"   📞 {telepon_penjual}\n"
+        f"   🏠 {alamat_penjual}, {kota_penjual}, {prov_penjual}\n"
         f"🗓 {start} → {end}\n"
         f"💰 Nilai limit: Rp {nilai_limit:,}\n"
+        f"⚖️ Cara penawaran: {cara_penawaran}\n"
+        f"📦 Barang:\n{uraian}\n"
+        f"🏦 Organizer: {organizer_info}\n"
+        f"👁️ Dilihat: {views}\n"
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
-    # kirim foto utama (dari katalog API)
-    photos = lot.get("photos", [])
-    sent = False
+    # ambil foto minimal 1
+    photos = detail.get("photos", [])
     if photos:
         photo_url = photos[0].get("file", {}).get("fileUrl") or photos[0].get("fileUrl")
         if photo_url and not photo_url.startswith("http"):
@@ -89,27 +127,19 @@ def send_message(lot):
         try:
             img = requests.get(photo_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
             if img.status_code == 200:
-                res = send_photo(img.content, caption)
-                print(f"[INFO] Lot {lot_id} terkirim dengan foto utama, status {res.status_code}")
-                sent = True
+                files = {"photo": ("img.jpg", img.content)}
+                data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
+                res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data, files=files)
+                print(f"[INFO] Lot {lot_id} terkirim dengan foto, status {res.status_code}")
+                return True
         except Exception as e:
-            print(f"[ERROR] Gagal kirim foto utama lot {lot_id}: {e}")
+            print(f"[ERROR] Gagal kirim foto lot {lot_id}: {e}")
 
-    if not sent:
-        res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                            data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"})
-        print(f"[INFO] Lot {lot_id} terkirim tanpa foto, status {res.status_code}")
-
-    # kirim screenshot tambahan (opsional, kalau URL tersedia)
-    screenshot_url = lot.get("screenshot_url")
-    if screenshot_url:
-        try:
-            ss = requests.get(screenshot_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-            if ss.status_code == 200:
-                res = send_photo(ss.content, f"📸 Screenshot detail lot {lot_id}")
-                print(f"[INFO] Screenshot lot {lot_id} terkirim, status {res.status_code}")
-        except Exception as e:
-            print(f"[ERROR] Gagal kirim screenshot lot {lot_id}: {e}")
+    # fallback tanpa foto
+    res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                        data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"})
+    print(f"[INFO] Lot {lot_id} terkirim tanpa foto, status {res.status_code}")
+    return False
 
 # =========================================
 # MAIN
@@ -133,7 +163,11 @@ def main():
         if not lot_id or lot_id in seen:
             continue
 
-        send_message(lot)
+        detail = fetch_detail(lot_id)
+        if not detail:
+            continue
+
+        send_message(lot, detail)
         seen.add(lot_id)
         new_count += 1
 
