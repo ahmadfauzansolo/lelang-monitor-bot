@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FINAL >400 BARIS)
+# APP.PY - BOT MONITOR LELANG FIXED
 # =========================================
 
 import requests
@@ -7,7 +7,6 @@ import json
 import os
 from dotenv import load_dotenv
 from datetime import datetime
-import time
 
 # =========================================
 # LOAD ENV
@@ -19,6 +18,7 @@ DETAIL_URL = "https://api.lelang.go.id/api/v1/landing-page/info/{}"  # {} = lotL
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 SEEN_FILE = "seen_api.json"
+BASE_PHOTO_URL = "https://file.lelang.go.id"
 
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Set TELEGRAM_TOKEN dan TELEGRAM_CHAT_ID di environment variables!")
@@ -50,9 +50,9 @@ def save_seen(seen):
 def format_date(d):
     try:
         dt = datetime.fromisoformat(d)
-        return dt.strftime("%d %b %Y")
+        return dt.strftime("%d %b %Y %H:%M")
     except Exception:
-        return d[:10] if d else "-"
+        return d[:16] if d else "-"
 
 def get_detail(lot_id):
     try:
@@ -75,16 +75,16 @@ def send_message(lot):
     nilai_limit = int(lot.get("nilaiLimit", 0))
     link = f"https://lelang.go.id/kpknl/{lot.get('unitKerjaId')}/detail-auction/{lot_id}"
 
-    # ambil detail lengkap
+    # Detail lengkap
     detail = get_detail(lot_id)
 
-    # Penjual - ambil langsung dari detail["seller"]
-    seller = detail.get("seller", {})
-    penjual = seller.get("namaOrganisasiPenjual") or "(tidak diketahui)"
-    telepon_penjual = seller.get("nomorTelepon", "-")
-    alamat_penjual = seller.get("alamat", "-")
-    kota_penjual = seller.get("namaKota", "-")
-    prov_penjual = seller.get("namaProvinsi", "-")
+    # Penjual
+    seller = detail.get("content", {}).get("seller", {})
+    penjual = seller.get("namaOrganisasiPenjual") or "-"
+    telepon_penjual = seller.get("nomorTelepon") or "-"
+    alamat_penjual = seller.get("alamat") or "-"
+    kota_penjual = seller.get("namaKota") or "-"
+    prov_penjual = seller.get("namaProvinsi") or "-"
 
     # Cara penawaran
     cara_penawaran = detail.get("caraPenawaran", "-").replace("_", " ").title()
@@ -129,21 +129,20 @@ def send_message(lot):
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
-    # ambil foto utama
+    # Ambil foto utama
     photos = detail.get("photos", [])
     photo_url = None
     if photos:
         for p in photos:
-            f = p.get("file", {})
-            if p.get("iscover") and f.get("fileUrl"):
-                photo_url = f.get("fileUrl")
-                break
+            if p.get("iscover"):
+                f = p.get("file", {})
+                if f.get("fileUrl"):
+                    photo_url = BASE_PHOTO_URL + f.get("fileUrl")
+                    break
         if not photo_url and photos[0].get("file",{}).get("fileUrl"):
-            photo_url = photos[0]["file"]["fileUrl"]
+            photo_url = BASE_PHOTO_URL + photos[0]["file"]["fileUrl"]
 
-    if photo_url and not photo_url.startswith("http"):
-        photo_url = f"https://file.lelang.go.id{photo_url}"
-
+    # Kirim ke Telegram
     if photo_url:
         try:
             img = requests.get(photo_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -156,7 +155,7 @@ def send_message(lot):
         except Exception as e:
             print(f"[ERROR] Gagal kirim foto lot {lot_id}: {e}")
 
-    # fallback tanpa foto
+    # Fallback tanpa foto
     res = requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
         data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"}
