@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FINAL - ONLY NEW LOT)
+# APP.PY - BOT MONITOR LELANG (FINAL + LOG)
 # =========================================
 import requests, json, os
 from dotenv import load_dotenv
@@ -22,13 +22,14 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
 # HELPERS
 # =========================================
 def load_seen():
-    if not os.path.exists(SEEN_FILE):
-        print("[INFO] seen_api.json tidak ada, membuat baru dengan isi []")
-        save_seen(set())
-        return set()
     try:
         with open(SEEN_FILE, "r", encoding="utf-8") as f:
-            return set(json.load(f))
+            seen = set(json.load(f))
+        print(f"[INFO] Loaded {len(seen)} lot dari seen_api.json")
+        return seen
+    except FileNotFoundError:
+        print("[INFO] seen_api.json tidak ditemukan, membuat baru")
+        return set()
     except Exception as e:
         print(f"[ERROR] Gagal load seen_api.json: {e}")
         return set()
@@ -72,6 +73,7 @@ def send_message(lot):
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
+    # ambil foto minimal 1
     photos = lot.get("photos", [])
     if photos:
         photo_url = photos[0].get("file", {}).get("fileUrl") or photos[0].get("fileUrl")
@@ -110,19 +112,28 @@ def main():
 
     seen = load_seen()
     new_count = 0
+    old_count = 0
 
     for lot in data:
         lot_id = lot.get("lotLelangId") or lot.get("id")
         if not lot_id:
             continue
 
-        if lot_id not in seen:
-            send_message(lot)
-            seen.add(lot_id)
-            new_count += 1
+        if lot_id in seen:
+            old_count += 1
+            continue
+
+        send_message(lot)
+        seen.add(lot_id)
+        new_count += 1
 
     save_seen(seen)
-    print(f"[INFO] {new_count} lot baru terkirim")
+
+    if new_count > 0:
+        print(f"[INFO] {new_count} lot baru terkirim, {old_count} lot lama dilewati")
+    else:
+        print(f"[INFO] Lot lama ditemukan {old_count}, tidak ada tambahan lot baru, tidak dikirim")
+
     print(f"[{datetime.now()}] Bot selesai kirim semua lot.")
 
 if __name__ == "__main__":
