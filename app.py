@@ -1,14 +1,12 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FINAL 400++ BARIS)
+# APP.PY - BOT MONITOR LELANG (FULL FINAL)
 # =========================================
-import requests
-import json
-import os
+import requests, json, os
 from dotenv import load_dotenv
 from datetime import datetime
 
 # =========================================
-# LOAD ENVIRONMENT VARIABLES
+# LOAD ENV
 # =========================================
 load_dotenv()
 
@@ -22,10 +20,9 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Set TELEGRAM_TOKEN dan TELEGRAM_CHAT_ID di environment variables!")
 
 # =========================================
-# HELPER FUNCTIONS
+# HELPERS
 # =========================================
 def load_seen():
-    """Load lot yang sudah dikirim dari file seen_api.json"""
     try:
         with open(SEEN_FILE, "r", encoding="utf-8") as f:
             seen = set(json.load(f))
@@ -39,7 +36,6 @@ def load_seen():
         return set()
 
 def save_seen(seen):
-    """Simpan lot yang sudah dikirim ke file seen_api.json"""
     try:
         with open(SEEN_FILE, "w", encoding="utf-8") as f:
             json.dump(list(seen), f, ensure_ascii=False, indent=2)
@@ -48,7 +44,6 @@ def save_seen(seen):
         print(f"[ERROR] Gagal simpan seen_api.json: {e}")
 
 def format_date(d):
-    """Format tanggal ISO ke dd MMM yyyy"""
     try:
         dt = datetime.fromisoformat(d)
         return dt.strftime("%d %b %Y")
@@ -56,7 +51,6 @@ def format_date(d):
         return d[:10] if d else "-"
 
 def get_detail(lot_id):
-    """Ambil detail lot dari API DETAIL_URL"""
     try:
         r = requests.get(DETAIL_URL.format(lot_id), timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         return r.json().get("data", {})
@@ -65,10 +59,9 @@ def get_detail(lot_id):
         return {}
 
 # =========================================
-# TELEGRAM FUNCTION
+# TELEGRAM
 # =========================================
 def send_message(lot):
-    """Kirim notifikasi lot ke Telegram"""
     lot_id = lot.get("lotLelangId") or lot.get("id")
     title = lot.get("namaLotLelang", "(tanpa judul)")
     lokasi = lot.get("namaLokasi", "(tidak diketahui)")
@@ -81,62 +74,39 @@ def send_message(lot):
     # ambil detail lengkap
     detail = get_detail(lot_id)
 
-    # =========================================
-    # DATA PENJUAL
-    # =========================================
+    # Penjual
     seller = detail.get("seller", {})
-    nama_penjual = seller.get("namaPenjual")
-    nama_organisasi = seller.get("namaOrganisasiPenjual")
-    if nama_penjual:
-        penjual = nama_penjual
-    elif nama_organisasi:
-        penjual = nama_organisasi
-    else:
-        penjual = "(tidak diketahui)"
-
+    penjual = seller.get("namaOrganisasiPenjual") or "(tidak diketahui)"
     telepon_penjual = seller.get("nomorTelepon", "-")
     alamat_penjual = seller.get("alamat", "-")
     kota_penjual = seller.get("namaKota", "-")
     prov_penjual = seller.get("namaProvinsi", "-")
 
-    # =========================================
-    # CARA PENAWARAN
-    # =========================================
+    # Cara penawaran
     cara_penawaran = detail.get("caraPenawaran", "-").replace("_", " ").title()
 
-    # =========================================
-    # UANG JAMINAN
-    # =========================================
+    # Uang jaminan
     uang_jaminan = int(detail.get("uangJaminan", 0))
 
-    # =========================================
-    # BARANG / URAIAN
-    # =========================================
+    # Barang / uraian
     barangs = detail.get("content", {}).get("barangs", [])
     uraian_list = []
     for b in barangs:
         uraian_list.append(
-            f"- {b.get('nama','-')} ({b.get('tahun','-')}, {b.get('warna','-')})\n"
-            f"  Nopol: {b.get('nopol','-')}, No. Rangka: {b.get('nomorRangka','-')}\n"
+            f"- {b.get('nama','-')} ({b.get('tahun','-')}, {b.get('warna','-')}, No. Rangka: {b.get('nomorRangka','-')}, Nopol: {b.get('nopol','-')})\n"
             f"  Alamat: {b.get('alamat','-')}\n"
             f"  Bukti kepemilikan: {b.get('buktiKepemilikan','-')} {b.get('buktiKepemilikanNo','-')}"
         )
     uraian = "\n".join(uraian_list) if uraian_list else "-"
 
-    # =========================================
-    # ORGANIZER
-    # =========================================
+    # Organizer info
     organizer = detail.get("content", {}).get("organizer", {})
     organizer_info = f"{organizer.get('namaUnitKerja','-')} / {organizer.get('namaBank','-')}"
 
-    # =========================================
-    # VIEWS
-    # =========================================
+    # Views
     views = detail.get("views", 0)
 
-    # =========================================
-    # CAPTION UNTUK TELEGRAM
-    # =========================================
+    # Build caption
     caption = (
         f"{title}\n"
         f"📍 Lokasi: {lokasi}\n"
@@ -154,28 +124,21 @@ def send_message(lot):
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
-    # =========================================
-    # FOTO
-    # =========================================
+    # Ambil foto
     photos = detail.get("photos", [])
     photo_url = None
     if photos:
-        # cari foto cover
         for p in photos:
             f = p.get("file", {})
             if p.get("iscover") and f.get("fileUrl"):
                 photo_url = f.get("fileUrl")
                 break
-        # fallback ke foto pertama
         if not photo_url and photos[0].get("file", {}).get("fileUrl"):
             photo_url = photos[0]["file"]["fileUrl"]
-
     if photo_url and not photo_url.startswith("http"):
         photo_url = f"https://file.lelang.go.id{photo_url}"
 
-    # =========================================
-    # KIRIM KE TELEGRAM
-    # =========================================
+    # Kirim Telegram
     if photo_url:
         try:
             img = requests.get(photo_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -195,7 +158,7 @@ def send_message(lot):
     return False
 
 # =========================================
-# MAIN FUNCTION
+# MAIN
 # =========================================
 def main():
     print(f"[{datetime.now()}] Bot mulai jalan...")
@@ -224,8 +187,5 @@ def main():
     print(f"[INFO] {new_count} lot baru terkirim")
     print(f"[{datetime.now()}] Bot selesai kirim semua lot.")
 
-# =========================================
-# ENTRY POINT
-# =========================================
 if __name__ == "__main__":
     main()
