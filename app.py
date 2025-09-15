@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FINAL)
+# APP.PY - BOT MONITOR LELANG (FINAL - ONLY NEW LOT)
 # =========================================
 import requests, json, os
 from dotenv import load_dotenv
@@ -22,14 +22,13 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
 # HELPERS
 # =========================================
 def load_seen():
+    if not os.path.exists(SEEN_FILE):
+        print("[INFO] seen_api.json tidak ada, membuat baru dengan isi []")
+        save_seen(set())
+        return set()
     try:
         with open(SEEN_FILE, "r", encoding="utf-8") as f:
-            seen = set(json.load(f))
-        print(f"[INFO] Loaded {len(seen)} lot dari seen_api.json")
-        return seen
-    except FileNotFoundError:
-        print("[INFO] seen_api.json tidak ditemukan, membuat baru")
-        return set()
+            return set(json.load(f))
     except Exception as e:
         print(f"[ERROR] Gagal load seen_api.json: {e}")
         return set()
@@ -73,7 +72,6 @@ def send_message(lot):
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
-    # ambil foto minimal 1
     photos = lot.get("photos", [])
     if photos:
         photo_url = photos[0].get("file", {}).get("fileUrl") or photos[0].get("fileUrl")
@@ -115,12 +113,13 @@ def main():
 
     for lot in data:
         lot_id = lot.get("lotLelangId") or lot.get("id")
-        if not lot_id or lot_id in seen:
+        if not lot_id:
             continue
 
-        send_message(lot)
-        seen.add(lot_id)
-        new_count += 1
+        if lot_id not in seen:
+            send_message(lot)
+            seen.add(lot_id)
+            new_count += 1
 
     save_seen(seen)
     print(f"[INFO] {new_count} lot baru terkirim")
