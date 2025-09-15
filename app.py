@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FINAL + DETAIL)
+# APP.PY - BOT MONITOR LELANG (DEBUG DETAIL)
 # =========================================
 import requests, json, os
 from dotenv import load_dotenv
@@ -60,7 +60,10 @@ def send_message(lot):
     # --- Ambil detail lot ---
     try:
         detail_url = f"https://api.lelang.go.id/api/v1/detail-lot-lelang/{lot_id}"
-        detail = requests.get(detail_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"}).json().get("data", {})
+        detail_resp = requests.get(detail_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        detail = detail_resp.json().get("data", {})
+        print(f"\n[DEBUG] Detail lot {lot_id}:")
+        print(json.dumps(detail, indent=2, ensure_ascii=False))  # print JSON lengkap
     except Exception as e:
         print(f"[ERROR] Gagal ambil detail lot {lot_id}: {e}")
         detail = {}
@@ -74,7 +77,7 @@ def send_message(lot):
     end = format_date(lot.get("tglSelesaiLelang", ""))
     nilai_limit = int(lot.get("nilaiLimit", 0))
 
-    # --- Data tambahan dari detail ---
+    # --- Data tambahan dari detail (sementara pakai default dulu) ---
     uang_jaminan = int(detail.get("uangJaminan", 0))
     cara_penawaran = detail.get("caraPenawaran", "-")
     kode_lot = detail.get("kodeLotLelang", "-")
@@ -97,28 +100,12 @@ def send_message(lot):
     )
 
     # --- Kirim ke Telegram ---
-    photos = lot.get("photos", [])
-    if photos:
-        photo_url = photos[0].get("file", {}).get("fileUrl") or photos[0].get("fileUrl")
-        if photo_url and not photo_url.startswith("http"):
-            photo_url = f"https://file.lelang.go.id{photo_url}"
-        try:
-            img = requests.get(photo_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-            if img.status_code == 200:
-                files = {"photo": ("img.jpg", img.content)}
-                data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
-                res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data, files=files)
-                print(f"[INFO] Lot {lot_id} terkirim dengan foto, status {res.status_code}")
-                return True
-        except Exception as e:
-            print(f"[ERROR] Gagal kirim foto lot {lot_id}: {e}")
-
     res = requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
         data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"}
     )
-    print(f"[INFO] Lot {lot_id} terkirim tanpa foto, status {res.status_code}")
-    return False
+    print(f"[INFO] Lot {lot_id} terkirim ke Telegram, status {res.status_code}")
+    return True
 
 # =========================================
 # MAIN
