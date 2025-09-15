@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FINAL)
+# APP.PY - BOT MONITOR LELANG (FINAL + SCREENSHOT)
 # =========================================
 import requests, json, os
 from dotenv import load_dotenv
@@ -52,6 +52,12 @@ def format_date(d):
 # =========================================
 # TELEGRAM
 # =========================================
+def send_photo(img_bytes, caption=""):
+    files = {"photo": ("img.jpg", img_bytes)}
+    data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
+    res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data, files=files)
+    return res
+
 def send_message(lot):
     lot_id = lot.get("lotLelangId") or lot.get("id")
     title = lot.get("namaLotLelang", "(tanpa judul)")
@@ -73,8 +79,9 @@ def send_message(lot):
         f"🔗 <a href='{link}'>Lihat detail lelang</a>"
     )
 
-    # ambil foto minimal 1
+    # kirim foto utama (dari katalog API)
     photos = lot.get("photos", [])
+    sent = False
     if photos:
         photo_url = photos[0].get("file", {}).get("fileUrl") or photos[0].get("fileUrl")
         if photo_url and not photo_url.startswith("http"):
@@ -82,19 +89,27 @@ def send_message(lot):
         try:
             img = requests.get(photo_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
             if img.status_code == 200:
-                files = {"photo": ("img.jpg", img.content)}
-                data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
-                res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data, files=files)
-                print(f"[INFO] Lot {lot_id} terkirim dengan foto, status {res.status_code}")
-                return True
+                res = send_photo(img.content, caption)
+                print(f"[INFO] Lot {lot_id} terkirim dengan foto utama, status {res.status_code}")
+                sent = True
         except Exception as e:
-            print(f"[ERROR] Gagal kirim foto lot {lot_id}: {e}")
+            print(f"[ERROR] Gagal kirim foto utama lot {lot_id}: {e}")
 
-    # fallback tanpa foto
-    res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                        data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"})
-    print(f"[INFO] Lot {lot_id} terkirim tanpa foto, status {res.status_code}")
-    return False
+    if not sent:
+        res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                            data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"})
+        print(f"[INFO] Lot {lot_id} terkirim tanpa foto, status {res.status_code}")
+
+    # kirim screenshot tambahan (opsional, kalau URL tersedia)
+    screenshot_url = lot.get("screenshot_url")
+    if screenshot_url:
+        try:
+            ss = requests.get(screenshot_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+            if ss.status_code == 200:
+                res = send_photo(ss.content, f"📸 Screenshot detail lot {lot_id}")
+                print(f"[INFO] Screenshot lot {lot_id} terkirim, status {res.status_code}")
+        except Exception as e:
+            print(f"[ERROR] Gagal kirim screenshot lot {lot_id}: {e}")
 
 # =========================================
 # MAIN
