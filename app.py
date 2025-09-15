@@ -1,5 +1,5 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (UPDATE LENGKAP)
+# APP.PY - BOT MONITOR LELANG (UPDATE LENGKAP FIX)
 # =========================================
 import requests, json, os
 from dotenv import load_dotenv
@@ -86,17 +86,21 @@ def send_message(lot):
     cara_penawaran = detail.get("caraPenawaran", "-").replace("_", " ").title()
 
     # Uang jaminan
-    uang_jaminan = int(detail.get("uangJaminan",0))
+    uang_jaminan = int(detail.get("uangJaminan", 0))
 
     # Barang / uraian
     barangs = detail.get("content", {}).get("barangs", [])
     uraian_list = []
     for b in barangs:
-        uraian_list.append(f"- {b.get('nama','-')} ({b.get('tahun','-')}, {b.get('warna','-')}, No. Rangka: {b.get('nomorRangka','-')}, Nopol: {b.get('nopol','-')})")
+        uraian_list.append(
+            f"- {b.get('nama','-')} ({b.get('tahun','-')}, {b.get('warna','-')}, Nopol: {b.get('nopol','-')}, No. Rangka: {b.get('nomorRangka','-')})\n"
+            f"  Alamat: {b.get('alamat','-')}\n"
+            f"  Bukti kepemilikan: {b.get('buktiKepemilikan','-')} {b.get('buktiKepemilikanNo','-')}"
+        )
     uraian = "\n".join(uraian_list) if uraian_list else "-"
 
     # Organizer info
-    organizer = detail.get("content", {}).get("organizer", {})
+    organizer = detail.get("organizer", {})
     organizer_info = f"{organizer.get('namaUnitKerja','-')} / {organizer.get('namaBank','-')}"
 
     # Views
@@ -125,12 +129,12 @@ def send_message(lot):
     if photos:
         # cari foto cover
         for p in photos:
-            f = p.get("file",{})
+            f = p.get("file", {})
             if p.get("iscover") and f.get("fileUrl"):
                 photo_url = f.get("fileUrl")
                 break
         # fallback ke foto pertama
-        if not photo_url and photos[0].get("file",{}).get("fileUrl"):
+        if not photo_url and photos[0].get("file", {}).get("fileUrl"):
             photo_url = photos[0]["file"]["fileUrl"]
 
     if photo_url and not photo_url.startswith("http"):
@@ -149,8 +153,10 @@ def send_message(lot):
             print(f"[ERROR] Gagal kirim foto lot {lot_id}: {e}")
 
     # fallback tanpa foto
-    res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                        data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"})
+    res = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"}
+    )
     print(f"[INFO] Lot {lot_id} terkirim tanpa foto, status {res.status_code}")
     return False
 
@@ -184,5 +190,4 @@ def main():
     print(f"[INFO] {new_count} lot baru terkirim")
     print(f"[{datetime.now()}] Bot selesai kirim semua lot.")
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main
