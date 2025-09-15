@@ -7,6 +7,7 @@ import json
 import os
 from dotenv import load_dotenv
 from datetime import datetime
+import time
 
 # =========================================
 # LOAD ENV
@@ -77,7 +78,7 @@ def send_message(lot):
     # ambil detail lengkap
     detail = get_detail(lot_id)
 
-    # Penjual
+    # Penjual - ambil langsung dari detail["seller"]
     seller = detail.get("seller", {})
     penjual = seller.get("namaOrganisasiPenjual") or "(tidak diketahui)"
     telepon_penjual = seller.get("nomorTelepon", "-")
