@@ -10,7 +10,7 @@ def fetch_lots():
 
         # DEBUG: tampilkan JSON mentah dari 1 lot pertama
         if lots:
-            logging.info("Contoh lot dari API:\n" + json.dumps(lots[0], indent=2, ensure_ascii=False))
+            logging.info("Contoh lot mentah dari API:\n" + json.dumps(lots[0], indent=2, ensure_ascii=False))
 
         return lots
     except Exception as e:
