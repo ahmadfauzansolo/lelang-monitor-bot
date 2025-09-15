@@ -190,4 +190,5 @@ def main():
     print(f"[INFO] {new_count} lot baru terkirim")
     print(f"[{datetime.now()}] Bot selesai kirim semua lot.")
 
-if __name__ == "__main
+if __name__ == "__main__":
+    main()
