@@ -1,4 +1,236 @@
 # =========================================
+# APP.PY - BOT MONITOR LELANG (FINAL STABLE)
+# =========================================
+# Versi ini:
+# - Ambil data utama dari API katalog (list lot)
+# - Untuk setiap lot baru, fetch detail dari endpoint detail-auction
+#   agar data penjual (nama, telp, alamat) selalu muncul
+# - Kirim ke Telegram dengan foto (jika ada), fallback ke text
+# - Simpan lot ID yang sudah dikirim di seen_api.json
+# - Logging lengkap agar mudah debug
+# =========================================
+
+import requests, json, os, time
+from dotenv import load_dotenv
+from datetime import datetime
+
+# =========================================
+# LOAD ENV
+# =========================================
+load_dotenv()
+
+API_URL = (
+    "https://api.lelang.go.id/api/v1/landing-page-kpknl/"
+    "6705ef6e-f64f-11ed-b3e2-5620a0c2ec5a/"
+    "katalog-lot-lelang?namakategori[]=Mobil&namakategori[]=Motor"
+)
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+SEEN_FILE = "seen_api.json"
+
+if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    raise Exception("Set TELEGRAM_TOKEN dan TELEGRAM_CHAT_ID di environment variables!")
+
+# =========================================
+# HELPERS - FILE SEEN
+# =========================================
+def load_seen():
+    try:
+        with open(SEEN_FILE, "r", encoding="utf-8") as f:
+            seen = set(json.load(f))
+        print(f"[INFO] Loaded {len(seen)} lot dari seen_api.json")
+        return seen
+    except FileNotFoundError:
+        print("[INFO] seen_api.json tidak ditemukan, membuat baru")
+        return set()
+    except Exception as e:
+        print(f"[ERROR] Gagal load seen_api.json: {e}")
+        return set()
+
+
+def save_seen(seen):
+    try:
+        with open(SEEN_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(seen), f, ensure_ascii=False, indent=2)
+        print(f"[INFO] Disimpan {len(seen)} lot ke seen_api.json")
+    except Exception as e:
+        print(f"[ERROR] Gagal simpan seen_api.json: {e}")
+
+
+# =========================================
+# HELPERS - FORMAT
+# =========================================
+def format_date(d, with_time=False):
+    try:
+        dt = datetime.fromisoformat(d)
+        if with_time:
+            return dt.strftime("%d %b %Y %H:%M")
+        return dt.strftime("%d %b %Y")
+    except Exception:
+        return d[:16] if d else "-"
+
+
+def format_rupiah(x):
+    try:
+        return f"Rp {int(x):,}".replace(",", ".")
+    except Exception:
+        return "Rp -"
+
+
+# =========================================
+# FETCH DETAIL
+# =========================================
+def fetch_detail(lot):
+    """Ambil detail lot dari endpoint detail-auction untuk melengkapi data penjual."""
+    try:
+        lot_id = lot.get("lotLelangId") or lot.get("id")
+        unit_kerja_id = lot.get("unitKerjaId")
+        if not lot_id or not unit_kerja_id:
+            return lot
+
+        url = f"https://api.lelang.go.id/api/v1/detail-lot/{unit_kerja_id}/{lot_id}"
+        r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code == 200:
+            detail = r.json().get("data", {})
+            lot.update(detail)  # merge
+            return lot
+        else:
+            print(f"[WARN] Fetch detail gagal {lot_id}, status {r.status_code}")
+    except Exception as e:
+        print(f"[ERROR] Gagal fetch detail lot {lot_id}: {e}")
+    return lot
+
+
+# =========================================
+# TELEGRAM
+# =========================================
+def send_message(lot):
+    lot_id = lot.get("lotLelangId") or lot.get("id")
+    title = lot.get("namaLotLelang", "(tanpa judul)")
+    lokasi = lot.get("namaLokasi", "(tidak diketahui)")
+    instansi = lot.get("namaUnitKerja", "(tidak diketahui)")
+
+    # Penjual detail (dari fetch_detail)
+    penjual = lot.get("namaOrganisasiPenjual") or "(tidak diketahui)"
+    telp = lot.get("noTelpOrganisasiPenjual") or "-"
+    alamat = lot.get("alamatOrganisasiPenjual") or "-"
+    kota = lot.get("kotaOrganisasiPenjual") or "-"
+    prov = lot.get("provinsiOrganisasiPenjual") or "-"
+
+    start = format_date(lot.get("tglMulaiLelang", ""), with_time=True)
+    end = format_date(lot.get("tglSelesaiLelang", ""), with_time=True)
+
+    nilai_limit = format_rupiah(lot.get("nilaiLimit", 0))
+    uang_jaminan = format_rupiah(lot.get("nilaiJaminan", 0))
+    cara = lot.get("jenisPenawaran", "-")
+    organizer = lot.get("namaUnitKerja") or "-"
+    bank = lot.get("namaBank") or "-"
+    dilihat = lot.get("jumlahView", 0)
+
+    # Link detail
+    link = f"https://lelang.go.id/kpknl/{lot.get('unitKerjaId')}/detail-auction/{lot_id}"
+
+    # Barang
+    barang_list = lot.get("barang", [])
+    barang_text = ""
+    for b in barang_list:
+        nm = b.get("namaBarang", "-")
+        tahun = b.get("tahun", "?")
+        warna = b.get("warna", "?")
+        rangka = b.get("noRangka", "?")
+        nopol = b.get("nomorPolisi", "?")
+        alamat_brg = b.get("alamat", "?")
+        bukti = b.get("dokumen", "?")
+        barang_text += (
+            f"- {nm} ({tahun}, {warna}, No. Rangka: {rangka}, Nopol: {nopol})\n"
+            f"  Alamat: {alamat_brg}\n"
+            f"  Bukti kepemilikan: {bukti}\n"
+        )
+
+    caption = (
+        f"{title}\n"
+        f"📍 Lokasi: {lokasi}\n"
+        f"🏢 Instansi: {instansi}\n"
+        f"👤 Penjual: {penjual}\n"
+        f"   📞 {telp}\n"
+        f"   🏠 {alamat}, {kota}, {prov}\n"
+        f"🗓 {start} → {end}\n"
+        f"💰 Nilai limit: {nilai_limit}\n"
+        f"💵 Uang jaminan: {uang_jaminan}\n"
+        f"⚖️ Cara penawaran: {cara}\n"
+        f"📦 Barang:\n{barang_text}"
+        f"🏦 Organizer: {organizer} / {bank}\n"
+        f"👁️ Dilihat: {dilihat}\n"
+        f"🔗 <a href='{link}'>Lihat detail lelang</a>"
+    )
+
+    # Foto
+    photos = lot.get("photos", [])
+    if photos:
+        photo_url = photos[0].get("file", {}).get("fileUrl") or photos[0].get("fileUrl")
+        if photo_url and not photo_url.startswith("http"):
+            photo_url = f"https://file.lelang.go.id{photo_url}"
+        try:
+            img = requests.get(photo_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            if img.status_code == 200:
+                files = {"photo": ("img.jpg", img.content)}
+                data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
+                res = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data, files=files)
+                print(f"[INFO] Lot {lot_id} terkirim dengan foto, status {res.status_code}")
+                return True
+        except Exception as e:
+            print(f"[ERROR] Gagal kirim foto lot {lot_id}: {e}")
+
+    # Fallback text
+    res = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        data={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML"},
+    )
+    print(f"[INFO] Lot {lot_id} terkirim tanpa foto, status {res.status_code}")
+    return False
+
+
+# =========================================
+# MAIN
+# =========================================
+def main():
+    print(f"[{datetime.now()}] Bot mulai jalan...")
+
+    try:
+        r = requests.get(API_URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        data = r.json().get("data", [])
+        print(f"[INFO] Ditemukan {len(data)} lot di API")
+    except Exception as e:
+        print(f"[ERROR] Gagal ambil data dari API: {e}")
+        return
+
+    seen = load_seen()
+    new_count = 0
+
+    for lot in data:
+        lot_id = lot.get("lotLelangId") or lot.get("id")
+        if not lot_id or lot_id in seen:
+            continue
+
+        # ambil detail
+        lot = fetch_detail(lot)
+
+        send_message(lot)
+        seen.add(lot_id)
+        new_count += 1
+
+    save_seen(seen)
+    print(f"[INFO] {new_count} lot baru terkirim")
+    print(f"[{datetime.now()}] Bot selesai kirim semua lot.")
+
+
+# =========================================
+# ENTRY
+# =========================================
+if __name__ == "__main__":
+    main()
+# =========================================
 # APP.PY - BOT MONITOR LELANG FIXED
 # =========================================
 
