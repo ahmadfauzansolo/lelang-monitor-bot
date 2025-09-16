@@ -1,17 +1,11 @@
 # =========================================
-# APP.PY - BOT MONITOR LELANG (FINAL, TELITI)
+# APP.PY - BOT MONITOR LELANG (FINAL - WITH DETAILED LOGGING)
 # =========================================
-# Fitur utama:
-# - Ambil list lot dari API katalog.
-# - Untuk setiap lot baru, fetch detail lewat endpoint
-#   https://api.lelang.go.id/api/v1/landing-page/info/{lotLelangId}
-# - Robust parsing: menangani variasi struktur ('content.barangs'
-#   atau 'content.lot.barang', fields 'nama' vs 'namaBarang', dsb.)
-# - Retry fetch detail (3x) dengan backoff kecil.
-# - Semua barang dicetak (tidak dipotong).
-# - Escaping HTML sebelum dikirim ke Telegram (parse_mode=HTML).
-# - Jika caption terlalu panjang, kirim foto + kirim teks lengkap terpisah.
-# - Simpan seen ids di seen_api.json.
+# Perubahan: menambahkan logging detail pada:
+#  - get_detail (attempts, status codes)
+#  - send_to_telegram (download attempts, HTTP status, Telegram response)
+#  - fallback flows (send by URL, send text)
+# Semua parsing / formatting / struktur pesan tetap sesuai versi yang sudah disetujui.
 # =========================================
 
 import requests
@@ -41,6 +35,17 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Set TELEGRAM_TOKEN dan TELEGRAM_CHAT_ID di environment variables!")
 
 # =========================================
+# SIMPLE LOGGING HELPERS (consistent format)
+# =========================================
+def log(level, msg):
+    # level: INFO, WARN, ERROR, DEBUG
+    print(f"[{datetime.now()}] [{level}] {msg}")
+
+def short(text, n=300):
+    t = str(text) or ""
+    return t if len(t) <= n else t[:n] + "...(truncated)"
+
+# =========================================
 # HELPERS - file seen
 # =========================================
 def load_seen():
@@ -48,30 +53,27 @@ def load_seen():
         with open(SEEN_FILE, "r", encoding="utf-8") as f:
             seen_list = json.load(f)
             seen = set(seen_list)
-        print(f"[INFO] Loaded {len(seen)} lot dari {SEEN_FILE}")
+        log("INFO", f"Loaded {len(seen)} lot dari {SEEN_FILE}")
         return seen
     except FileNotFoundError:
-        print(f"[INFO] {SEEN_FILE} tidak ditemukan, membuat baru")
+        log("INFO", f"{SEEN_FILE} tidak ditemukan, membuat baru")
         return set()
     except Exception as e:
-        print(f"[ERROR] Gagal load {SEEN_FILE}: {e}")
+        log("ERROR", f"Gagal load {SEEN_FILE}: {e}")
         return set()
-
 
 def save_seen(seen):
     try:
         with open(SEEN_FILE, "w", encoding="utf-8") as f:
             json.dump(list(seen), f, ensure_ascii=False, indent=2)
-        print(f"[INFO] Disimpan {len(seen)} lot ke {SEEN_FILE}")
+        log("INFO", f"Disimpan {len(seen)} lot ke {SEEN_FILE}")
     except Exception as e:
-        print(f"[ERROR] Gagal simpan {SEEN_FILE}: {e}")
-
+        log("ERROR", f"Gagal simpan {SEEN_FILE}: {e}")
 
 # =========================================
 # UTILITIES: formatting & safe-get
 # =========================================
 def format_date_iso(d, with_time=False):
-    """Format ISO -> 'DD Mon YYYY HH:MM' atau 'DD Mon YYYY'."""
     try:
         if not d:
             return "-"
@@ -80,9 +82,7 @@ def format_date_iso(d, with_time=False):
     except Exception:
         return d[:16] if d else "-"
 
-
 def format_rupiah(v):
-    """Format numeric/string to 'Rp 12,345,000' or return '-'."""
     try:
         if v is None or v == "":
             return "Rp -"
@@ -91,16 +91,12 @@ def format_rupiah(v):
     except Exception:
         return "Rp -"
 
-
 def html_escape(s):
-    """Escape &, <, > for Telegram HTML mode (minimal)."""
     if s is None:
         return ""
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-
 def first_non_empty(*args):
-    """Return the first arg that's not None/empty-string."""
     for a in args:
         if a is None:
             continue
@@ -109,44 +105,41 @@ def first_non_empty(*args):
         return a
     return None
 
-
 # =========================================
-# FETCH DETAIL with retries
+# FETCH DETAIL with retries + logging
 # =========================================
-def get_detail(lot_id, retries=3, backoff=0.5):
-    """Fetch detail endpoint (landing-page/info/{lot_id}) with retries."""
+def get_detail(lot_id, retries=3, backoff=0.6):
     if not lot_id:
         return {}
     url = DETAIL_URL.format(lot_id)
     last_exc = None
     for attempt in range(1, retries + 1):
         try:
+            log("DEBUG", f"Fetch detail attempt {attempt} for {lot_id} -> {url}")
             r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            log("DEBUG", f"Detail fetch status {r.status_code} for {lot_id}")
             if r.status_code == 200:
-                return r.json().get("data", {}) or {}
+                try:
+                    data = r.json().get("data", {}) or {}
+                    log("INFO", f"Berhasil fetch detail {lot_id} (size: {len(json.dumps(data))} bytes)")
+                    return data
+                except Exception as e:
+                    log("WARN", f"Parsing JSON detail {lot_id} gagal: {e} -- response snippet: {short(r.text)}")
+                    return {}
             else:
-                print(f"[WARN] Fetch detail gagal {lot_id}, status {r.status_code} (attempt {attempt})")
+                log("WARN", f"Fetch detail gagal {lot_id}, status {r.status_code} (attempt {attempt}) -- snippet: {short(r.text)}")
         except Exception as e:
             last_exc = e
-            print(f"[WARN] Exception fetch detail {lot_id} attempt {attempt}: {e}")
+            log("WARN", f"Exception fetch detail {lot_id} attempt {attempt}: {e}")
         time.sleep(backoff * attempt)
     if last_exc:
-        print(f"[ERROR] Semua percobaan fetch detail gagal untuk {lot_id}: {last_exc}")
+        log("ERROR", f"Semua percobaan fetch detail gagal untuk {lot_id}: {last_exc}")
     return {}
-
 
 # =========================================
 # PARSE DETAIL: robustly pick fields from possible locations
 # =========================================
 def parse_detail(detail):
-    """
-    Given 'detail' = r.json().get('data', {}), return a dict with:
-    - seller_name, seller_phone, seller_address, seller_city, seller_prov
-    - cara_penawaran
-    - uang_jaminan
-    - barangs_list (list of dict per item)
-    - organizer_info, views, photos_list
-    """
     out = {
         "seller_name": None,
         "seller_phone": None,
@@ -163,12 +156,9 @@ def parse_detail(detail):
     if not detail:
         return out
 
-    # often the 'content' container
     content = detail.get("content", {}) or {}
-
-    # --- seller (several key-name variations observed) ---
     seller = content.get("seller") or detail.get("seller") or {}
-    # common keys seen in examples: 'namaOrganisasiPenjual', 'namaPenjual'
+
     out["seller_name"] = first_non_empty(
         seller.get("namaOrganisasiPenjual"),
         seller.get("namaPenjual"),
@@ -180,7 +170,6 @@ def parse_detail(detail):
         seller.get("nomorTelepon"),
         seller.get("nomor_telepon"),
         seller.get("telepon"),
-        seller.get("nomorTelepon"),
         seller.get("nomor"),
     ) or None
 
@@ -201,7 +190,6 @@ def parse_detail(detail):
         seller.get("provinsi"),
     ) or None
 
-    # --- cara penawaran: try multiple paths ---
     out["cara_penawaran"] = first_non_empty(
         detail.get("caraPenawaran"),
         content.get("caraPenawaran"),
@@ -209,23 +197,19 @@ def parse_detail(detail):
         detail.get("cara_penawaran"),
     ) or None
 
-    # --- uang jaminan ---
     out["uang_jaminan"] = first_non_empty(
         detail.get("uangJaminan"),
         detail.get("uang_jaminan"),
         content.get("uangJaminan"),
     )
 
-    # --- barangs: multiple possible locations/names ---
     barangs = content.get("barangs")
     if not barangs:
         lot_block = content.get("lot") or {}
         barangs = lot_block.get("barang") or lot_block.get("barangs")
     if not barangs:
-        # fallback to some alternate keys
         barangs = detail.get("barangs") or []
 
-    # normalize each barang item into dict with common keys
     normalized = []
     for b in barangs or []:
         nm = first_non_empty(b.get("nama"), b.get("namaBarang"), b.get("nama_barang"))
@@ -259,7 +243,6 @@ def parse_detail(detail):
         )
     out["barangs"] = normalized
 
-    # --- organizer (common fields) ---
     organizer = content.get("organizer") or detail.get("organizer") or {}
     out["organizer"] = {
         "namaUnitKerja": organizer.get("namaUnitKerja") or organizer.get("nama_unit_kerja") or organizer.get("namaUnit"),
@@ -268,44 +251,36 @@ def parse_detail(detail):
         "alamat": organizer.get("alamat"),
     }
 
-    # --- views, photos ---
     out["views"] = first_non_empty(detail.get("views"), detail.get("jumlahView"), 0) or 0
     out["photos"] = detail.get("photos") or content.get("photos") or detail.get("photos", []) or []
 
     return out
 
-
 # =========================================
 # BUILD CAPTION / TEXT (all barang included)
 # =========================================
 def build_message_text(lot, detail_parsed):
-    # basic lot fields (some come from listing 'lot', some from detail)
     title = lot.get("namaLotLelang") or lot.get("namaLot") or "(tanpa judul)"
     lokasi = lot.get("namaLokasi") or lot.get("lokasi") or "-"
     instansi = lot.get("namaUnitKerja") or lot.get("namaUnit") or "-"
     start = format_date_iso(lot.get("tglMulaiLelang") or lot.get("tglMulai"), with_time=True)
     end = format_date_iso(lot.get("tglSelesaiLelang") or lot.get("tglSelesai"), with_time=True)
 
-    # seller
     seller_name = detail_parsed.get("seller_name") or "(tidak diketahui)"
     seller_phone = detail_parsed.get("seller_phone") or "-"
     seller_addr = detail_parsed.get("seller_address") or "-"
     seller_city = detail_parsed.get("seller_city") or "-"
     seller_prov = detail_parsed.get("seller_prov") or "-"
 
-    # money
     nilai_limit = format_rupiah(first_non_empty(lot.get("nilaiLimit"), lot.get("nilai_limit"), None))
-    uang_jaminan = format_rupiah(first_non_empty(detail_parsed.get("uang_jaminan"), detail_parsed.get("uang_jaminan"), lot.get("uangJaminan"), lot.get("uangJaminan")))  # try multiple
+    uang_jaminan = format_rupiah(first_non_empty(detail_parsed.get("uang_jaminan"), detail_parsed.get("uang_jaminan"), lot.get("uangJaminan"), lot.get("uangJaminan")))
 
-    # cara penawaran
     cara = detail_parsed.get("cara_penawaran") or "-"
     if isinstance(cara, str):
         cara = cara.replace("_", " ").title()
 
-    # barang: build full multi-line text for all items (no truncation)
     barang_lines = []
     for i, b in enumerate(detail_parsed.get("barangs", []) or [], start=1):
-        # Format consistent and readable
         nm = b.get("nama", "-")
         tahun = b.get("tahun", "-")
         warna = b.get("warna", "-")
@@ -316,9 +291,7 @@ def build_message_text(lot, detail_parsed):
         bukti_no = b.get("bukti_no", "-")
         stnk = b.get("stnk", "-")
 
-        # Compose block for each barang
         block = []
-        # main line: name + summary
         summary = f"- {nm} ({tahun}, {warna})"
         detail_data = []
         if rangka and rangka != "-":
@@ -330,31 +303,24 @@ def build_message_text(lot, detail_parsed):
         if detail_data:
             summary += " — " + " / ".join(detail_data)
         block.append(summary)
-        # alamat
         if alamat_b and alamat_b != "-":
             block.append(f"  Alamat: {alamat_b}")
-        # bukti kepemilikan
-        bk = bukti
-        if bk and bk != "-":
+        if bukti and bukti != "-":
             if bukti_no and bukti_no != "-":
-                block.append(f"  Bukti kepemilikan: {bk} {bukti_no}")
+                block.append(f"  Bukti kepemilikan: {bukti} {bukti_no}")
             else:
-                block.append(f"  Bukti kepemilikan: {bk}")
+                block.append(f"  Bukti kepemilikan: {bukti}")
         barang_lines.append("\n".join(block))
 
     barang_text = "\n".join(barang_lines) if barang_lines else "-"
 
-    # organizer
     organizer = detail_parsed.get("organizer", {}) or {}
     organizer_info = f"{organizer.get('namaUnitKerja') or '-'} / {organizer.get('namaBank') or '-'}"
 
     views = detail_parsed.get("views") or 0
 
-    # link
     link = f"https://lelang.go.id/kpknl/{lot.get('unitKerjaId')}/detail-auction/{lot.get('lotLelangId') or lot.get('id')}"
 
-    # Compose full text (HTML-escaped)
-    # We escape each dynamic part to avoid breaking HTML parse_mode
     pieces = []
     pieces.append(html_escape(title))
     pieces.append(f"📍 Lokasi: {html_escape(lokasi)}")
@@ -367,7 +333,6 @@ def build_message_text(lot, detail_parsed):
     pieces.append(f"💵 Uang jaminan: {html_escape(uang_jaminan)}")
     pieces.append(f"⚖️ Cara penawaran: {html_escape(cara)}")
     pieces.append("📦 Barang:")
-    # barang lines need to be escaped too, but keep newlines
     if barang_text != "-":
         barang_blocks_escaped = []
         for blk in barang_lines:
@@ -382,69 +347,96 @@ def build_message_text(lot, detail_parsed):
     full_text = "\n".join(pieces)
     return full_text
 
-
 # =========================================
-# SEND to TELEGRAM (photo + text handling)
+# SEND to TELEGRAM (single cover photo preferred) with detailed logging
 # =========================================
 def send_to_telegram(full_text, photos):
-    """
-    photos: list of photo dicts as returned by API (each may have 'file'->'fileUrl')
-    Strategy:
-    - If there is a photo, try to send photo plus a short caption (first 800 chars).
-      Then send full_text as separate message (so we don't exceed caption limit).
-    - If no photo, send full_text with sendMessage.
-    """
-    # Telegram caption limit ~1024 chars. We'll use safe_cap = 800.
-    safe_caption_len = 800
-
-    # find photo_url (prefer iscover)
-    photo_url = None
+    safe_caption_len = 800  # keep below Telegram caption limit and safe with HTML
+    photo_item = None
     if photos:
         for p in photos:
             if p.get("iscover"):
-                f = p.get("file", {}) or {}
-                if f.get("fileUrl"):
-                    photo_url = f.get("fileUrl")
-                    break
-        if not photo_url:
-            # fallback to first photo
-            f = photos[0].get("file", {}) if photos[0].get("file") else {}
-            if f.get("fileUrl"):
-                photo_url = f.get("fileUrl")
+                photo_item = p
+                break
+        if not photo_item:
+            photo_item = photos[0]
+
+    photo_url = None
+    if photo_item:
+        file_block = photo_item.get("file") or {}
+        file_url = file_block.get("fileUrl") or photo_item.get("fileUrl")
+        if file_url:
+            photo_url = file_url if file_url.startswith("http") else BASE_PHOTO_URL + file_url
+            log("DEBUG", f"Resolved photo_url: {photo_url}")
+
+    caption_short = full_text
+    if len(caption_short) > safe_caption_len:
+        caption_short = caption_short[:safe_caption_len].rsplit("\n", 1)[0] + "\n\u2026"
+
+    # 1) Try download with Referer header and upload to Telegram
     if photo_url:
-        if not photo_url.startswith("http"):
-            photo_url = BASE_PHOTO_URL + photo_url
-        # prepare short caption (first lines of full_text) — safe HTML
-        caption_short = full_text
-        if len(caption_short) > safe_caption_len:
-            caption_short = caption_short[:safe_caption_len].rsplit("\n", 1)[0] + "\n\u2026"  # add ellipsis
-        # send photo
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://lelang.go.id/",
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        }
         try:
-            img_resp = requests.get(photo_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-            if img_resp.status_code == 200:
+            log("DEBUG", f"Attempting to download photo for upload: {photo_url}")
+            img_resp = requests.get(photo_url, timeout=20, headers=headers)
+            log("DEBUG", f"Download status: {img_resp.status_code} for {short(photo_url)}")
+            if img_resp.status_code == 200 and img_resp.content:
+                # verify minimal content
+                if len(img_resp.content) < 500:
+                    log("WARN", f"Downloaded image seems small ({len(img_resp.content)} bytes) - might be HTML error page")
                 files = {"photo": ("img.jpg", img_resp.content)}
                 data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption_short, "parse_mode": "HTML"}
-                r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data, files=files, timeout=30)
-                if r.status_code in (200, 201):
-                    # send full text as separate message if truncated or if caption_short != full_text
-                    if caption_short != full_text:
-                        time.sleep(0.5)
-                        send_message_text(full_text)
-                    return True
-                else:
-                    print(f"[WARN] sendPhoto status {r.status_code}, fallback to sendMessage")
+                try:
+                    r = requests.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+                        data=data,
+                        files=files,
+                        timeout=30,
+                    )
+                    log("DEBUG", f"Telegram upload response: {r.status_code} - {short(r.text)}")
+                    if r.status_code in (200, 201):
+                        log("INFO", f"Photo uploaded & sent via Telegram (upload) successfully")
+                        # if caption truncated, send full message separately
+                        if caption_short != full_text:
+                            time.sleep(0.4)
+                            send_message_text(full_text)
+                        return True
+                    else:
+                        log("WARN", f"sendPhoto (upload) returned {r.status_code} - {short(r.text)}")
+                except Exception as e:
+                    log("WARN", f"Exception during upload-to-telegram: {e}")
             else:
-                print(f"[WARN] Gagal download photo {photo_url}, status {img_resp.status_code}")
+                log("WARN", f"Gagal download photo {photo_url}, status {img_resp.status_code} (will try fallback)")
         except Exception as e:
-            print(f"[WARN] Exception saat kirim photo: {e}")
+            log("WARN", f"Exception saat download photo {photo_url}: {e}")
 
-    # fallback: kirim text saja
+        # 2) Fallback: let Telegram fetch photo by URL
+        try:
+            log("DEBUG", f"Attempting fallback sendPhoto by URL: {photo_url}")
+            data_url = {"chat_id": TELEGRAM_CHAT_ID, "photo": photo_url, "caption": caption_short, "parse_mode": "HTML"}
+            r2 = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=data_url, timeout=25)
+            log("DEBUG", f"Telegram sendPhoto(by URL) response: {r2.status_code} - {short(r2.text)}")
+            if r2.status_code in (200, 201):
+                log("INFO", "Photo sent via Telegram by URL successfully (fallback).")
+                if caption_short != full_text:
+                    time.sleep(0.4)
+                    send_message_text(full_text)
+                return True
+            else:
+                log("WARN", f"sendPhoto (by URL) returned {r2.status_code} - {short(r2.text)}")
+        except Exception as e:
+            log("WARN", f"Exception during sendPhoto(by URL): {e}")
+
+    # 3) Final fallback: send text only
+    log("INFO", "All photo attempts failed or no photo available - sending text only.")
     send_message_text(full_text)
     return False
 
-
 def send_message_text(text):
-    """Send long text via sendMessage (HTML)."""
     try:
         res = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
@@ -452,31 +444,26 @@ def send_message_text(text):
             timeout=30,
         )
         if res.status_code not in (200, 201):
-            print(f"[WARN] sendMessage status {res.status_code}: {res.text}")
+            log("WARN", f"sendMessage status {res.status_code}: {short(res.text)}")
+        else:
+            log("INFO", "sendMessage success (text message).")
         return res
     except Exception as e:
-        print(f"[ERROR] Exception sendMessage: {e}")
+        log("ERROR", f"Exception sendMessage: {e}")
         return None
 
-
 # =========================================
-# MAIN send_message per lot (glue)
+# MAIN per-lot processing (glue)
 # =========================================
 def process_and_send(lot):
-    """
-    For a given lot (from listing), fetch detail, parse, build text, send to Telegram.
-    Returns True if photo-sent (or any send), False otherwise.
-    """
     lot_id = lot.get("lotLelangId") or lot.get("id")
     if not lot_id:
-        print("[WARN] Lot tanpa id, skip")
+        log("WARN", "Lot tanpa id, skip")
         return False
 
-    # fetch detail (robust)
     detail = get_detail(lot_id)
     if not detail:
-        # still try to build from listing minimal info
-        print(f"[WARN] Detail kosong untuk {lot_id}, akan kirim data minimal dari listing")
+        log("WARN", f"Detail kosong untuk {lot_id}, akan kirim data minimal dari listing")
         detail_parsed = {
             "seller_name": lot.get("namaPenjual") or lot.get("namaOrganisasiPenjual"),
             "seller_phone": lot.get("nomorTelepon") or lot.get("nomor_telepon"),
@@ -493,30 +480,25 @@ def process_and_send(lot):
     else:
         detail_parsed = parse_detail(detail)
 
-    # build full text
     full_text = build_message_text(lot, detail_parsed)
-
-    # send
     photos = detail_parsed.get("photos") or []
     sent = send_to_telegram(full_text, photos)
     return sent
-
 
 # =========================================
 # MAIN (loop once)
 # =========================================
 def main():
-    print(f"[{datetime.now()}] Bot mulai jalan...")
-
+    log("INFO", "Bot mulai jalan...")
     try:
         r = requests.get(API_URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code != 200:
-            print(f"[ERROR] Gagal ambil listing, status {r.status_code}")
+            log("ERROR", f"Gagal ambil listing, status {r.status_code} -- {short(r.text)}")
             return
         data = r.json().get("data", []) or []
-        print(f"[INFO] Ditemukan {len(data)} lot di API")
+        log("INFO", f"Ditemukan {len(data)} lot di API")
     except Exception as e:
-        print(f"[ERROR] Gagal ambil data dari API: {e}")
+        log("ERROR", f"Gagal ambil data dari API: {e}")
         return
 
     seen = load_seen()
@@ -532,16 +514,20 @@ def main():
         try:
             process_and_send(lot)
         except Exception as e:
-            print(f"[ERROR] Gagal proses lot {lot_id}: {e}")
+            log("ERROR", f"Gagal proses lot {lot_id}: {e}")
         seen.add(lot_id)
         new_count += 1
 
     save_seen(seen)
     if new_count == 0:
-        print(f"[{datetime.now()}] [INFO] Tidak ada lot baru, semua sudah terkirim")
+        log("INFO", "Tidak ada lot baru, semua sudah terkirim")
     else:
-        print(f"[{datetime.now()}] [INFO] {new_count} lot baru terkirim")
-    print(f"[{datetime.now()}] Bot selesai.")
+        log("INFO", f"{new_count} lot baru terkirim")
+    log("INFO", "Bot selesai.")
 
 if __name__ == "__main__":
     main()
+
+# =========================================
+# END OF SCRIPT
+# =========================================
