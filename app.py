@@ -12,13 +12,14 @@ sambil menambahkan perbaikan untuk:
  - fallback bila upload foto gagal: coba sendPhoto by URL -> kirim teks saja
  - error handling dan logging sangat detail
 
-Catatan penting:
- - Jangan mengubah variabel API_URL / DETAIL_URL kecuali kamu tahu apa yang kamu lakukan.
- - Pastikan TELEGRAM_TOKEN dan TELEGRAM_CHAT_ID ada di .env
- - Script ini dirancang untuk dijalankan berkala (cron) atau manual.
+Perubahan KECIL dan TERPUSAT (agar tidak mengirim lot lama):
+ - jika file `SEEN_FILE` belum ada: script akan INISIALISASI file tersebut
+   dengan daftar lot yang ada saat ini dan *tidak* mengirim apapun pada run ini.
+   (mencegah broadcast lot lama saat pertama kali menjalankan script)
+ - normalisasi ID ke string saat load/save/cek, supaya perbandingan stabil
+ - penyimpanan `seen` dilakukan secara atomik (tulis ke .tmp lalu replace)
 
-TODO / opsi konfigurasi ada di bagian CONFIGURATION di bawah.
-
+Catatan: selain perubahan di atas, logic lain saya usahakan tidak diubah.
 """
 
 # -----------------------------------------
@@ -92,11 +93,18 @@ def load_seen() -> Set[str]:
     try:
         with open(SEEN_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            seen = set(data if isinstance(data, list) else [])
+            # normalisasi semua entry ke string agar perbandingan stabil
+            if isinstance(data, list):
+                seen = set(str(x) for x in data if x is not None)
+            else:
+                seen = set()
         logger.info(f"Loaded {len(seen)} lot dari {SEEN_FILE}")
         return seen
     except FileNotFoundError:
-        logger.info(f"{SEEN_FILE} tidak ditemukan, membuat baru")
+        # IMPORTANT: jangan langsung return empty set yang akan membuat script
+        # mengirim semua lot saat pertama kali dijalankan. Kita akan inisialisasi
+        # SEEN_FILE setelah fetch list di main().
+        logger.info(f"{SEEN_FILE} tidak ditemukan, akan diinisialisasi setelah fetch list (untuk menghindari repost lot lama)")
         return set()
     except Exception as e:
         logger.error(f"Gagal load {SEEN_FILE}: {e}")
@@ -105,8 +113,13 @@ def load_seen() -> Set[str]:
 
 def save_seen(seen: Set[str]):
     try:
-        with open(SEEN_FILE, "w", encoding="utf-8") as f:
+        # simpan secara atomik: tulis ke file .tmp lalu replace
+        tmp = SEEN_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            # pastikan menyimpan list yang stabil (string)
             json.dump(sorted(list(seen)), f, ensure_ascii=False, indent=2)
+        # atomic replace
+        os.replace(tmp, SEEN_FILE)
         logger.info(f"Disimpan {len(seen)} lot ke {SEEN_FILE}")
     except Exception as e:
         logger.error(f"Gagal simpan {SEEN_FILE}: {e}")
@@ -257,7 +270,7 @@ def fetch_detail(session: requests.Session, lot_id: str, referer: Optional[str] 
         except Exception as e:
             logger.warning(f"Exception during fetch_detail {lot_id}: {e}")
             time.sleep(0.4)
-    logger.warn(f"Gagal fetch detail setelah {attempts} percobaan: {lot_id}")
+    logger.warning(f"Gagal fetch detail setelah {attempts} percobaan: {lot_id}")
     return {}
 
 # -----------------------------------------
@@ -424,14 +437,14 @@ def download_photo_bytes(session: requests.Session, photo_url: str, referer: Opt
                 return content
             else:
                 logger.warning(f"Gagal download photo {resolved}, status {status}")
-                # small backoff, but if 403 keep trying — sometimes cookie/Referer needed
+                # small backoff, but if 403 keep trying — kadang cookie/Referer needed
                 time.sleep(0.25 * attempt)
                 continue
         except Exception as e:
             logger.warning(f"Exception saat download photo {resolved}: {e}")
             time.sleep(0.25)
             continue
-    logger.warn(f"Gagal download photo setelah {attempts} percobaan: {resolved}")
+    logger.warning(f"Gagal download photo setelah {attempts} percobaan: {resolved}")
     return None
 
 
@@ -586,7 +599,7 @@ def send_lot(session: requests.Session, lot: Dict[str, Any]) -> bool:
 
     # If detail is empty, we still try to compose a minimal message from list item
     if not detail:
-        logger.warn(f"Detail kosong untuk {lot_id}, mengirim info minimal")
+        logger.warning(f"Detail kosong untuk {lot_id}, mengirim info minimal")
         caption_min = (
             f"{esc(title)}\n"
             f"📍 Lokasi: {esc(lokasi)}\n"
@@ -659,6 +672,18 @@ def main():
     # 1) fetch list
     lots = fetch_list(session)
 
+    # Safety: jika SEEN_FILE belum ada, inisialisasi SEEN_FILE dengan daftar lot saat ini
+    # dan JANGAN mengirim apapun pada run ini — mencegah broadcast lot lama saat pertama kali run.
+    if not os.path.exists(SEEN_FILE):
+        init_seen = set()
+        for lot in lots:
+            raw = lot.get("lotLelangId") or lot.get("id")
+            if raw:
+                init_seen.add(str(raw))
+        save_seen(init_seen)
+        logger.info(f"SEEN_FILE '{SEEN_FILE}' tidak ditemukan sebelumnya. Inisialisasi dengan {len(init_seen)} lot dari list saat ini. Tidak mengirim apapun pada run ini.")
+        return
+
     # 2) load seen
     seen = load_seen()
 
@@ -666,10 +691,12 @@ def main():
 
     for lot in lots:
         try:
-            lot_id = lot.get("lotLelangId") or lot.get("id")
-            if not lot_id:
+            raw_id = lot.get("lotLelangId") or lot.get("id")
+            if not raw_id:
                 logger.debug("Skip lot tanpa id")
                 continue
+            # normalisasi id ke string supaya perbandingan dengan seen konsisten
+            lot_id = str(raw_id)
             if lot_id in seen:
                 logger.debug(f"Lot {lot_id} sudah pernah dikirim, lewati")
                 continue
